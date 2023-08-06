@@ -1,0 +1,66 @@
+$schema: https://raw.githubusercontent.com/oyvindberg/bleep/master/schema.json
+$version: 0.0.2
+jvm:
+  name: graalvm-java17:22.3.1
+resolvers:
+  - https://repo1.maven.org/maven2/
+  - https://oss.sonatype.org/content/repositories/snapshots/
+projects:
+  tests:
+    dependencies:
+      - dev.zio::zio-test:2.0.15
+    dependsOn: zio-schema-rust
+    extends: template-common
+    isTestProject: true
+  zio-rust-codegen:
+    dependencies:
+      - dev.zio::zio:2.0.15
+      - dev.zio::zio-nio:2.0.1
+      - dev.zio::zio-parser:0.1.9
+      - dev.zio::zio-prelude:1.0.0-RC19
+      - dev.zio::zio-schema:0.4.13
+      - dev.zio::zio-streams:2.0.15
+    extends: template-common
+  zio-schema-rust:
+    dependsOn:
+      - zio-rust-codegen
+    dependencies:
+      - dev.zio::zio:2.0.15
+      - dev.zio::zio-nio:2.0.1
+      - dev.zio::zio-parser:0.1.9
+      - dev.zio::zio-prelude:1.0.0-RC19
+      - dev.zio::zio-schema:0.4.13
+      - dev.zio::zio-schema-derivation:0.4.13
+      - dev.zio::zio-schema-json:0.4.13
+      - dev.zio::zio-streams:2.0.15
+    extends: template-common
+    platform:
+      mainClass: zio.schema.rust.Playground
+  zio-http-rust:
+    dependsOn:
+      - zio-rust-codegen
+      - zio-schema-rust
+    dependencies:
+      - dev.zio::zio-http:3.0.0-RC2+45-e3636f00-SNAPSHOT
+    extends: template-common
+  rust-client-generator:
+    dependsOn:
+      - zio-http-rust
+      - zio-schema-rust
+    dependencies:
+      - dev.zio::zio:2.0.15
+      - dev.zio::zio-nio:2.0.1
+      - dev.zio::zio-parser:0.1.9
+      - dev.zio::zio-prelude:1.0.0-RC19
+      - dev.zio::zio-schema:0.4.13
+      - dev.zio::zio-schema-derivation:0.4.13
+      - dev.zio::zio-streams:2.0.15
+    extends: template-common
+templates:
+  template-common:
+    platform:
+      name: jvm
+    scala:
+      options: -encoding utf8 -feature -unchecked
+      strict: true
+      version: 3.3.0
