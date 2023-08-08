@@ -41,6 +41,8 @@ object RustType:
   val serialize: RustType = module("serde").primitive("Serialize")
   val deserialize: RustType = module("serde").primitive("Deserialize")
 
+  val asyncTrait: RustType = module("async_trait").primitive("async_trait")
+
   def box(inner: RustType) = parametric("Box", inner)
 
   def crate(): RustTypeInModule = RustTypeInModule(Chunk("crate"))

@@ -1,12 +1,12 @@
 package zio.http.rust
 
 import zio.Chunk
-import zio.http.Method
+import zio.http.{Method, Status}
 import zio.http.codec.{HttpCodec, HttpCodecType, PathCodec, SegmentCodec, SimpleCodec, TextCodec}
 import zio.http.endpoint.*
 import zio.prelude.*
 import zio.prelude.fx.*
-import zio.rust.codegen.ast.{Crate, Name, RustType}
+import zio.rust.codegen.ast.{Crate, Name, RustDef, RustType}
 import zio.schema.Schema
 import zio.schema.rust.RustModel
 
@@ -18,6 +18,8 @@ final case class RustEndpoint(
     headers: Chunk[RustParameter],
     bodies: Chunk[(Name, RustType)],
     requiredCrates: Set[Crate],
+    outputs: Map[Status, RustType],
+    errors: Map[Status, RustType],
     referredSchemas: Set[Schema[?]]
 ):
   def ++(other: RustEndpoint): RustEndpoints =
@@ -38,12 +40,34 @@ final case class RustEndpoint(
     pathParams ++ queryParams ++ bodies ++ headerParams
 
   def resultType: RustType =
-    RustType.result(RustType.unit, RustType.module("reqwest").primitive("Error"))
+    RustType.result(
+      outputs.head._2,
+      RustType.primitive((name.toPascalCase + "Error").asString),
+    ) // TODO
+
+  def extraDefs: Chunk[RustDef] =
+    Chunk(
+      if outputs.size > 1 then
+        Chunk(RustDef.`enum`(name.toPascalCase + "Success", outputs.map { case (status, tpe) =>
+          RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
+        }.toSeq : _*))
+      else Chunk.empty,
+      Chunk(
+        RustDef.`enum`(
+          name.toPascalCase + "Error",
+          RustDef.newtype(Name.fromString("RequestFailure"), RustType.module("reqwest").primitive("Error")) +:
+          errors.map { case (status, tpe) =>
+          RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
+        }.toSeq : _*)
+      )
+    ).flatten
 
   def toEndpoints: RustEndpoints =
     RustEndpoints(Name.fromString("Api"), Chunk(this))
 
 object RustEndpoint:
+  final case class PossibleOutput(tpe: RustType, status: Option[Status], isError: Boolean, schema: Schema[?])
+
   final case class State(
       method: String,
       pathSegments: Chunk[RustPathSegment],
@@ -51,6 +75,9 @@ object RustEndpoint:
       headers: Chunk[RustParameter],
       bodies: Chunk[(Name, RustType)],
       referredSchemas: Set[Schema[?]],
+      possibleOutputStack: List[PossibleOutput],
+      outputs: Map[Status, RustType],
+      errors: Map[Status, RustType],
       requiredCrates: Set[Crate]
   ):
     def addBody(name: Name, tpe: RustType, schema: Schema[?]): State =
@@ -77,6 +104,35 @@ object RustEndpoint:
     def addRequiredCrates(crates: Set[Crate]): State =
       copy(requiredCrates = requiredCrates ++ crates)
 
+    def addResultType(tpe: RustType, schema: Schema[?]): State =
+      copy(
+        possibleOutputStack = possibleOutputStack.head.copy(tpe = tpe, schema = schema) :: possibleOutputStack.tail
+      )
+
+    def addStatus(status: Status): State =
+      copy(
+        possibleOutputStack = possibleOutputStack.head.copy(status = Some(status)) :: possibleOutputStack.tail
+      )
+
+    def startPossibleOutput(isError: Boolean): State =
+      copy(possibleOutputStack = possibleOutputStack :+ PossibleOutput(RustType.unit, None, isError, Schema[Unit]))
+
+    def finishPossibleOutput(): State =
+      val PossibleOutput(tpe, status, isError, schema) = possibleOutputStack.head
+      val newPossibleOutputStack = possibleOutputStack.tail
+      status match
+        case None => this
+        case Some(status) =>
+          val newOutputs = if !isError then outputs.updated(status, tpe) else outputs
+          val newErrors = if isError then errors.updated(status, tpe) else errors
+          val newReferredSchemas = referredSchemas + schema
+          copy(
+            possibleOutputStack = newPossibleOutputStack,
+            outputs = newOutputs,
+            errors = newErrors,
+            referredSchemas = newReferredSchemas
+          )
+
   object State:
     val empty: State =
       State(
@@ -86,6 +142,9 @@ object RustEndpoint:
         headers = Chunk.empty,
         bodies = Chunk.empty,
         referredSchemas = Set.empty,
+        possibleOutputStack = List.empty,
+        outputs = Map.empty,
+        errors = Map.empty,
         requiredCrates = Set.empty
       )
 
@@ -98,6 +157,12 @@ object RustEndpoint:
     val builder =
       for {
         _ <- addInput(endpoint.input)
+        _ <- updateState(_.startPossibleOutput(isError = false))
+        _ <- addOutput(endpoint.output, isError = false)
+        _ <- updateState(_.finishPossibleOutput())
+        _ <- updateState(_.startPossibleOutput(isError = true))
+        _ <- addOutput(endpoint.error, isError = true)
+        _ <- updateState(_.finishPossibleOutput())
         state <- getState
       } yield state
 
@@ -112,12 +177,17 @@ object RustEndpoint:
       headers = state.headers,
       bodies = state.bodies,
       referredSchemas = state.referredSchemas,
+      outputs = state.outputs,
+      errors = state.errors,
       requiredCrates = state.requiredCrates
     )
 
   private def getState: Fx[State] = ZPure.get[State]
   private def updateState(f: State => State): Fx[Unit] =
     ZPure.update[State, State](f)
+
+  private def tryUpdateState(f: State => Either[String, State]): Fx[Unit] =
+    ZPure.get[State].flatMap(state => ZPure.fromEither(f(state))).flatMap(ZPure.set[State])
 
   private def addInput[Input](input: HttpCodec[HttpCodecType.RequestType, Input], optional: Boolean = false): Fx[Unit] =
     input match
@@ -192,6 +262,64 @@ object RustEndpoint:
         addInput(in)
       case HttpCodec.WithExamples(in, examples) =>
         addInput(in)
+
+  private def addOutput[Output](output: HttpCodec[HttpCodecType.ResponseType, Output], isError: Boolean): Fx[Unit] =
+    output match
+      case HttpCodec.Combine(left, right, inputCombiner) =>
+        for
+          _ <- addOutput(left, isError)
+          _ <- addOutput(right, isError)
+        yield ()
+      case HttpCodec.Content(schema, mediaType, name, index) =>
+        ZPure
+          .fromEither(RustModel.fromSchema(schema))
+          .flatMap: model =>
+            val typeRef = model.typeRefs(schema)
+            // TODO: support multipart/form-data output
+            updateState(
+              _.addResultType(typeRef, schema)
+            )
+      case HttpCodec.ContentStream(schema, mediaType, name, index) =>
+        ZPure
+          .fromEither(RustModel.fromSchema(schema))
+          .flatMap: model =>
+            val typeRef = RustType.vec(model.typeRefs(schema))
+            // TODO: support multipart/form-data output
+            updateState(_.addResultType(typeRef, schema))
+      case HttpCodec.Empty =>
+        ZPure.unit
+      case HttpCodec.Halt =>
+        ZPure.unit
+      case HttpCodec.Fallback(HttpCodec.Halt, right) =>
+        addOutput(right, isError)
+      case HttpCodec.Fallback(left, right) =>
+        for
+          _ <- updateState(_.startPossibleOutput(isError))
+          _ <- addOutput(left, isError)
+          _ <- addOutput(right, isError)
+          _ <- updateState(_.finishPossibleOutput())
+        yield ()
+      case HttpCodec.Header(name, codec, index) =>
+        ZPure.unit // TODO: support expected result headers
+      case HttpCodec.Status(codec, index) =>
+        codec match
+          case SimpleCodec.Specified(value) =>
+            updateState(_.addStatus(value))
+          case SimpleCodec.Unspecified() =>
+            ZPure.fail("Unspecified status")
+
+      case HttpCodec.TransformOrFail(api, f, g) =>
+        addOutput(api, isError)
+      case HttpCodec.WithDoc(in, doc) =>
+        addOutput(in, isError)
+      case HttpCodec.WithExamples(in, examples) =>
+        addOutput(in, isError)
+      case HttpCodec.Path(codec, index) =>
+        ZPure.fail("Unexpected codec in output position")
+      case HttpCodec.Query(name, codec, index) =>
+        ZPure.fail("Unexpected codec in output position")
+      case HttpCodec.Method(codec, index) =>
+        ZPure.fail("Unexpected codec in output position")
 
   private def addPath[Input](codec: PathCodec[Input]): Fx[Unit] =
     codec match

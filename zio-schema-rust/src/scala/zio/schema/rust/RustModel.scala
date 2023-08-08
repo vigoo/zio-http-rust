@@ -24,6 +24,9 @@ object RustModel:
   def fromSchema[A](schema: Schema[A]): Either[String, RustModel] =
     process(schema).zipRight(ZPure.get[State]).provideState(empty).runEither.map(postProcess)
 
+  def fromSchemas(schemas: Seq[Schema[?]]): Either[String, RustModel] =
+    ZPure.forEach(schemas)(process).zipRight(ZPure.get[State]).provideState(empty).runEither.map(postProcess)
+
   private def postProcess(model: State): RustModel =
     RustModel(
       typeRefs = model.typeRefs,

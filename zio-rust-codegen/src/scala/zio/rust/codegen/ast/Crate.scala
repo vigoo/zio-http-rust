@@ -3,6 +3,7 @@ package zio.rust.codegen.ast
 final case class Crate(name: String, version: String, features: Set[String] = Set.empty)
 
 object Crate:
+  val asyncTrait: Crate = Crate("async_trait", "0.1.72")
   val bigdecimal: Crate = Crate("bigdecimal", "0.4.1")
   val chrono: Crate = Crate("chrono", "0.4.26")
   val chronoTz: Crate = Crate("chrono-tz", "0.8.3")

@@ -7,6 +7,8 @@ object Name:
   def fromString(name: String): Name = name
 
   extension (name: Name)
+    def +(postfix: String): Name = Name.fromString(name + postfix)
+
     def asString: String = name
 
     def parts: Chunk[String] =
