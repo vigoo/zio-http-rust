@@ -6,6 +6,7 @@ import zio.http.codec.{HttpCodec, HttpCodecType, PathCodec, SegmentCodec, Simple
 import zio.http.endpoint.*
 import zio.prelude.*
 import zio.prelude.fx.*
+import zio.rust.codegen.ast.RustDef.ParameterModifier
 import zio.rust.codegen.ast.{Crate, Name, RustDef, RustType}
 import zio.schema.Schema
 import zio.schema.rust.RustModel
@@ -39,28 +40,67 @@ final case class RustEndpoint(
 
     pathParams ++ queryParams ++ bodies ++ headerParams
 
+  def errorType: RustType = RustType.primitive(errorTypeName.asString)
+
+  def errorTypeName: Name = name.toPascalCase + "Error"
+
   def resultType: RustType =
     RustType.result(
       outputs.head._2,
-      RustType.primitive((name.toPascalCase + "Error").asString),
+      errorType
     ) // TODO
 
   def extraDefs: Chunk[RustDef] =
     Chunk(
       if outputs.size > 1 then
-        Chunk(RustDef.`enum`(name.toPascalCase + "Success", outputs.map { case (status, tpe) =>
-          RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
-        }.toSeq : _*))
+        Chunk(
+          RustDef.`enum`(
+            name.toPascalCase + "Success",
+            outputs.map { case (status, tpe) =>
+              RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
+            }.toSeq: _*
+          )
+        )
       else Chunk.empty,
       Chunk(
         RustDef.`enum`(
-          name.toPascalCase + "Error",
+          errorTypeName,
           RustDef.newtype(Name.fromString("RequestFailure"), RustType.module("reqwest").primitive("Error")) +:
-          errors.map { case (status, tpe) =>
-          RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
-        }.toSeq : _*)
+            errors.map { case (status, tpe) =>
+              RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
+            }.toSeq: _*
+        ),
+        RustDef.impl(
+          RustType.parametric("From", RustType.module("reqwest").primitive("Error")),
+          errorType,
+          RustDef.fn(
+            Name.fromString("from"),
+            Chunk(
+              RustDef.Parameter.Named(ParameterModifier.None, Name.fromString("error"), RustType.module("reqwest").primitive("Error"))
+            ),
+            errorType,
+            errorTypeName.asString + "::RequestFailure(error)"
+          )
+        )
       )
     ).flatten
+
+  def pathExpression: String =
+    if pathSegments.forall(_.isLiteral) then
+      """"""" +
+        pathSegments
+          .collect:
+            case RustPathSegment.Literal(value) => value
+          .mkString("/") + """""""
+    else
+      """&format!("""" +
+        pathSegments
+          .map:
+            case RustPathSegment.Trailing           => "{path}"
+            case RustPathSegment.Parameter(name, _) => "{" + name.toSnakeCase.asString + "}"
+            case RustPathSegment.Literal(value)     => value
+          .mkString("/") +
+        """")"""
 
   def toEndpoints: RustEndpoints =
     RustEndpoints(Name.fromString("Api"), Chunk(this))
@@ -183,6 +223,7 @@ object RustEndpoint:
     )
 
   private def getState: Fx[State] = ZPure.get[State]
+
   private def updateState(f: State => State): Fx[Unit] =
     ZPure.update[State, State](f)
 

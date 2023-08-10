@@ -58,9 +58,9 @@ object RustModel:
           stacked(schema):
             schema match
               case sum: Schema.Enum[_] =>
-                ZPure.succeed(RustType.primitive(sum.id.name))
+                ZPure.succeed(RustType.crate().module("model").primitive(sum.id.name))
               case record: Schema.Record[_] =>
-                ZPure.succeed(RustType.primitive(record.id.name))
+                ZPure.succeed(RustType.crate().module("model").primitive(record.id.name))
               case map: Schema.Map[_, _] =>
                 for
                   key <- boxIfNeeded(map.keySchema)

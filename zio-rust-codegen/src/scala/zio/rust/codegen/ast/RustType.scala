@@ -176,6 +176,9 @@ object RustType:
     RustType.Vec(inner)
 
 final case class RustTypeInModule(path: Chunk[String]):
+  def module(name: String): RustTypeInModule =
+    RustTypeInModule(path :+ name)
+
   def parametric(name: String, args: RustType*): RustType =
     RustType.Parametric(name, Chunk.fromIterable(args))
 
