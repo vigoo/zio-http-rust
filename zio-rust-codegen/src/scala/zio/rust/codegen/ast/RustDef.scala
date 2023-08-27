@@ -5,15 +5,16 @@ import zio.Chunk
 enum RustDef:
   case TypeAlias(name: Name, typ: RustType, derives: Chunk[RustType])
   case Newtype(name: Name, typ: RustType, derives: Chunk[RustType])
-  case Struct(name: Name, fields: Chunk[RustDef.Field], derives: Chunk[RustType])
+  case Struct(name: Name, fields: Chunk[RustDef.Field], derives: Chunk[RustType], isPublic: Boolean)
   case Enum(name: Name, cases: Chunk[RustDef], derives: Chunk[RustType])
+  case Impl(tpe: RustType, functions: Chunk[RustDef])
   case ImplTrait(implemented: RustType, forType: RustType, functions: Chunk[RustDef])
-  case Function(name: Name, parameters: Chunk[RustDef.Parameter], returnType: RustType, body: String)
+  case Function(name: Name, parameters: Chunk[RustDef.Parameter], returnType: RustType, body: String, isPublic: Boolean)
 
   def derive(tpe: RustType): RustDef = this match
     case TypeAlias(name, typ, derives) => TypeAlias(name, typ, derives :+ tpe)
     case Newtype(name, typ, derives)   => Newtype(name, typ, derives :+ tpe)
-    case Struct(name, fields, derives) => Struct(name, fields, derives :+ tpe)
+    case Struct(name, fields, derives, isPublic) => Struct(name, fields, derives :+ tpe, isPublic)
     case Enum(name, cases, derives)    => Enum(name, cases, derives :+ tpe)
     case _                             => this
 
@@ -36,13 +37,22 @@ object RustDef:
     Enum(name, Chunk.fromIterable(cases), derives = Chunk.empty)
 
   def fn(name: Name, parameters: Chunk[Parameter], result: RustType, body: String): RustDef =
-    Function(name, parameters, result, body)
+    Function(name, parameters, result, body, isPublic = false)
 
-  def impl(impleneted: RustType, forType: RustType, functions: RustDef*): RustDef =
-    ImplTrait(impleneted, forType, Chunk.fromIterable(functions))
+  def pubFn(name: Name, parameters: Chunk[Parameter], result: RustType, body: String): RustDef =
+    Function(name, parameters, result, body, isPublic = true)
+
+  def impl(implemented: RustType, forType: RustType, functions: RustDef*): RustDef =
+    ImplTrait(implemented, forType, Chunk.fromIterable(functions))
+
+  def impl(tpe: RustType, functions: RustDef*): RustDef =
+    Impl(tpe, Chunk.fromIterable(functions))
 
   def newtype(name: Name, typ: RustType): RustDef =
     Newtype(name, typ, derives = Chunk.empty)
 
+  def pubStruct(name: Name, fields: Field*): RustDef =
+    Struct(name, Chunk.fromIterable(fields), derives = Chunk.empty, isPublic = true)
+
   def struct(name: Name, fields: Field*): RustDef =
-    Struct(name, Chunk.fromIterable(fields), derives = Chunk.empty)
+    Struct(name, Chunk.fromIterable(fields), derives = Chunk.empty, isPublic = false)

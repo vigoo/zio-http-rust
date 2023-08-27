@@ -63,8 +63,8 @@ object Rust:
     case RustDef.Newtype(n, tpe, ds) =>
       indent(level) ~ derives(ds) ~ str("pub struct") ~~ name(n) ~ parentheses(typename(tpe)) ~
         ch(';')
-    case RustDef.Struct(n, fields, ds) =>
-      indent(level) ~ derives(ds) ~ str("pub struct") ~~ name(n) ~~ ch('{') ~ newline ~
+    case RustDef.Struct(n, fields, ds, isPublic) =>
+      indent(level) ~ derives(ds) ~ (if isPublic then str("pub ") else Printer.unit) ~ str("struct") ~~ name(n) ~~ ch('{') ~ newline ~
         structFields(1)(fields) ~ ch('}')
     case RustDef.Enum(n, cases, ds) =>
       indent(level) ~ derives(ds) ~ str("pub enum") ~~ name(n) ~~ ch('{') ~ newline ~
@@ -72,8 +72,13 @@ object Rust:
     case RustDef.ImplTrait(implemented, forType, functions) =>
       indent(level) ~ str("impl") ~~ typename(implemented) ~~ str("for") ~~ typename(forType) ~~ ch('{') ~ newline ~
         definition(1).*(functions) ~ newline ~ ch('}')
-    case RustDef.Function(n, parameters, result, body) =>
-      indent(level) ~ str("fn") ~~ name(n) ~ parentheses(parameterList(parameters)) ~~ str("->") ~~ typename(result) ~~ ch('{') ~ newline
+    case RustDef.Impl(tpe, functions) =>
+      indent(level) ~ str("impl") ~~ typename(tpe) ~~ ch('{') ~ newline ~
+        definition(1).*(functions) ~ newline ~ ch('}')
+    case RustDef.Function(n, parameters, result, body, isPublic) =>
+      indent(level) ~ (if isPublic then str("pub ") else Printer.unit) ~ str("fn") ~~ name(n) ~ parentheses(parameterList(parameters)) ~~ str("->") ~~ typename(
+        result
+      ) ~~ ch('{') ~ newline
         ~ indent(level + 1) ~ str(body) ~ newline ~
         indent(level) ~ ch('}')
 
@@ -122,7 +127,7 @@ object Rust:
         .print(
           '\n'
         )
-    case RustDef.Struct(n, fields, _) =>
+    case RustDef.Struct(n, fields, _, _) =>
       indent ~ name(n) ~~ ch('{') ~ newline ~
         structFields(2)(fields) ~ indent ~ ch('}') ~ ch(',') ~ newline
     case _ =>

@@ -166,7 +166,7 @@ object RustType:
       case StandardType.PeriodType     => None
       case StandardType.YearType       => Some(RustDef.newtype(Name.fromString("Year"), i32))
       case StandardType.YearMonthType =>
-        Some(RustDef.struct(Name.fromString("YearMonth"), RustDef.Field(Name.fromString("year"), year), RustDef.Field(Name.fromString("month"), month)))
+        Some(RustDef.pubStruct(Name.fromString("YearMonth"), RustDef.Field(Name.fromString("year"), year), RustDef.Field(Name.fromString("month"), month)))
       case StandardType.ZoneIdType         => None
       case StandardType.ZoneOffsetType     => None
       case StandardType.DurationType       => None

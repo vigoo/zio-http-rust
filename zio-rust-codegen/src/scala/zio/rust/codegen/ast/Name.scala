@@ -8,6 +8,7 @@ object Name:
 
   extension (name: Name)
     def +(postfix: String): Name = Name.fromString(name + postfix)
+    def ++(postfix: Name): Name = Name.fromString(name + postfix.asString)
 
     def asString: String = name
 

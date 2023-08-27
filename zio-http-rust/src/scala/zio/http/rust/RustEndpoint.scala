@@ -4,10 +4,13 @@ import zio.{Chunk, IO, ZIO}
 import zio.http.{Method, Status}
 import zio.http.codec.{HttpCodec, HttpCodecType, PathCodec, SegmentCodec, SimpleCodec, TextCodec}
 import zio.http.endpoint.*
+import zio.http.rust.RustEndpoint.EndpointErrorCase
+import zio.http.rust.printer.RustClient
 import zio.prelude.*
 import zio.prelude.fx.*
 import zio.rust.codegen.ast.RustDef.ParameterModifier
 import zio.rust.codegen.ast.{Crate, Name, RustDef, RustType}
+import zio.rust.codegen.printer.Rust
 import zio.schema.Schema
 import zio.schema.rust.RustModel
 
@@ -20,8 +23,9 @@ final case class RustEndpoint(
     bodies: Chunk[(Name, RustType)],
     requiredCrates: Set[Crate],
     outputs: Map[Status, RustType],
-    errors: Map[Status, RustType],
-    referredSchemas: Set[Schema[?]]
+    errors: Map[Status, EndpointErrorCase],
+    referredSchemas: Set[Schema[?]],
+    knownErrorAdt: Option[Schema[?]]
 ):
   def ++(other: RustEndpoint): RustEndpoints =
     RustEndpoints(Name.fromString("Api"), Chunk(this, other))
@@ -50,7 +54,12 @@ final case class RustEndpoint(
       errorType
     ) // TODO
 
+  def successType: RustType = outputs.head._2
+
   def extraDefs: Chunk[RustDef] =
+    val nonExternalErrors = errors.filterNot:
+      case (_, EndpointErrorCase.ExternalType(_)) => true
+      case _                                      => false
     Chunk(
       if outputs.size > 1 then
         Chunk(
@@ -66,9 +75,16 @@ final case class RustEndpoint(
         RustDef.`enum`(
           errorTypeName,
           RustDef.newtype(Name.fromString("RequestFailure"), RustType.module("reqwest").primitive("Error")) +:
-            errors.map { case (status, tpe) =>
-              RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
-            }.toSeq: _*
+            RustDef.newtype(Name.fromString("UnexpectedStatus"), RustType.module("reqwest").primitive("StatusCode")) +:
+            errors
+              .map:
+                case (status, EndpointErrorCase.ExternalType(tpe)) =>
+                  RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
+                case (status, EndpointErrorCase.Inlined(fields, _, _, _, _)) =>
+                  RustDef.pubStruct(Name.fromString(s"Status${status.code}"), fields: _*)
+                case (status, EndpointErrorCase.Simple(_)) =>
+                  RustDef.newtype(Name.fromString(s"Status${status.code}"), RustType.unit)
+              .toSeq: _*
         ),
         RustDef.impl(
           RustType.parametric("From", RustType.module("reqwest").primitive("Error")),
@@ -82,7 +98,33 @@ final case class RustEndpoint(
             errorTypeName.asString + "::RequestFailure(error)"
           )
         )
-      )
+      ),
+      if nonExternalErrors.nonEmpty && knownErrorAdt.nonEmpty then
+        val knownErrorAdtEnum = knownErrorAdt.get.asInstanceOf[Schema.Enum[?]]
+        val knownErrorAdtName = Name.fromString(knownErrorAdtEnum.id.name) // TODO: no cast
+        Chunk(
+          RustDef.impl(
+            errorType,
+            RustDef.pubFn(
+              (Name.fromString("to") ++ knownErrorAdtName).toSnakeCase,
+              Chunk(RustDef.Parameter.Self(ParameterModifier.Ref)),
+              RustType.optional(RustType.crate().module("model").primitive(knownErrorAdtName.asString)),
+              toKnownErrorAdt(errorTypeName, errors, knownErrorAdtEnum)
+            )
+          )
+        )
+      else Chunk.empty,
+      Chunk
+        .fromIterable(errors)
+        .collect:
+          case (status, EndpointErrorCase.Inlined(fields, cname, errorAdt, errorAdtName, originalFields)) => (errorAdtName ++ cname + "Payload", originalFields)
+        .map: (name, fields) =>
+          RustDef
+            .struct(name, fields: _*)
+            .derive(RustType.debug)
+            .derive(RustType.rustClone)
+            .derive(RustType.serialize)
+            .derive(RustType.deserialize)
     ).flatten
 
   def pathExpression: String =
@@ -105,8 +147,25 @@ final case class RustEndpoint(
   def toEndpoints: RustEndpoints =
     RustEndpoints(Name.fromString("Api"), Chunk(this))
 
+  private def toKnownErrorAdt(name: Name, errors: Map[Status, RustEndpoint.EndpointErrorCase], errorAdt: Schema.Enum[?]): String =
+    RustClient.errorAdtConversion
+      .printString(
+        (
+          name,
+          errors.map((k, v) => (k.code, v)),
+          RustType.crate().module("model").primitive(Name.fromString(errorAdt.id.name).asString)
+        )
+      )
+      .toOption
+      .get // TODO
+
 object RustEndpoint:
   final case class PossibleOutput(tpe: RustType, status: Option[Status], isError: Boolean, schema: Schema[?])
+
+  enum EndpointErrorCase:
+    case Simple(constructorName: Name)
+    case ExternalType(tpe: RustType)
+    case Inlined(fields: Chunk[RustDef.Field], constructorName: Name, errorAdt: RustType, errorAdtName: Name, originalFields: Chunk[RustDef.Field])
 
   final case class State(
       method: String,
@@ -117,7 +176,7 @@ object RustEndpoint:
       referredSchemas: Set[Schema[?]],
       possibleOutputStack: List[PossibleOutput],
       outputs: Map[Status, RustType],
-      errors: Map[Status, RustType],
+      errors: Map[Status, EndpointErrorCase],
       requiredCrates: Set[Crate],
       knownErrorAdt: Option[Schema[?]]
   ):
@@ -168,8 +227,28 @@ object RustEndpoint:
           val isErrorCons = isError && isConstructorOfKnownErrorAdt(schema)
           val newErrors =
             if isError then
-              if isErrorCons then errors.updated(status, RustType.unit) // TODO
-              else errors.updated(status, tpe)
+              if isErrorCons then
+                schema match
+                  case record: Schema.Record[?] =>
+                    if record.fields.isEmpty then errors.updated(status, EndpointErrorCase.Simple(Name.fromString(record.id.name)))
+                    else
+                      val model = RustModel.fromSchema(record).toOption.get
+                      val fields = model.definitions.collectFirst:
+                        case RustDef.Struct(name, fields, _, _) if name == Name.fromString(record.id.name) =>
+                          (fields.map(_.copy(attributes = Chunk.empty, isPublic = false)), fields)
+                      errors.updated(
+                        status,
+                        EndpointErrorCase.Inlined(
+                          fields.map(_._1).getOrElse(Chunk.empty),
+                          Name.fromString(record.id.name),
+                          knownErrorAdtType.get,
+                          knownErrorAdtName.get,
+                          fields.map(_._2).getOrElse(Chunk.empty)
+                        )
+                      )
+                  case _ =>
+                    errors.updated(status, EndpointErrorCase.Simple(Name.fromString("unknown")))
+              else errors.updated(status, EndpointErrorCase.ExternalType(tpe))
             else errors
           val newReferredSchemas = if isErrorCons then referredSchemas else referredSchemas + schema
           copy(
@@ -183,6 +262,15 @@ object RustEndpoint:
       knownErrorAdt.exists:
         case sum: Schema.Enum[_] => sum.cases.exists(_.schema == schema)
         case _                   => false
+
+    private def knownErrorAdtType: Option[RustType] =
+      knownErrorAdtName.map: name =>
+        RustType.crate().module("model").primitive(name.asString)
+
+    private def knownErrorAdtName: Option[Name] =
+      knownErrorAdt.flatMap:
+        case sum: Schema.Enum[_] => Some(Name.fromString(sum.id.name))
+        case _                   => None
 
   object State:
     val empty: State =
@@ -232,7 +320,8 @@ object RustEndpoint:
       referredSchemas = state.referredSchemas,
       outputs = state.outputs,
       errors = state.errors,
-      requiredCrates = state.requiredCrates
+      requiredCrates = state.requiredCrates,
+      state.knownErrorAdt
     )
 
   private def getState: Fx[State] = ZPure.get[State]

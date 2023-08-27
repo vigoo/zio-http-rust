@@ -26,7 +26,7 @@ object RustClient:
   def liveClientImpl: Rust[RustEndpoints] =
     Printer.byValue: endpoints =>
       definition(
-        RustDef.struct(endpoints.liveName, RustDef.Field(Name.fromString("base_url"), reqwestUrl)).derive(RustType.rustClone).derive(RustType.debug)
+        RustDef.pubStruct(endpoints.liveName, RustDef.Field(Name.fromString("base_url"), reqwestUrl)).derive(RustType.rustClone).derive(RustType.debug)
       ) ~ newline ~ newline ~
         attribute(asyncTrait) ~
         str("impl") ~~ name(endpoints.name.toPascalCase) ~~ str("for") ~~ name(endpoints.liveName.toPascalCase) ~~ ch('{') ~ newline ~
@@ -45,9 +45,77 @@ object RustClient:
         indent(3) ~ str(".build()?") ~ newline ~
         indent(3) ~ ch('.') ~ str(endpoint.method.toLowerCase) ~ parentheses(str("url")) ~ newline ~
         indent(3) ~ str(".send()") ~ newline ~
-        indent(3) ~ str(".await") ~ ch(';') ~ newline ~
-        indent(2) ~ str("todo!()") ~ newline ~
-        indent(2) ~ ch('}') ~ newline
+        indent(3) ~ str(".await?") ~ ch(';') ~ newline ~
+        indent(2) ~ str("match") ~~ str("result.status().as_u16()") ~~ ch('{') ~ newline ~
+        indent(3) ~ str("200") ~~ str("=>") ~~ ch('{') ~ newline ~
+        indent(4) ~ str("let body") ~~ ch('=') ~~ str("result.json::<") ~ typename(endpoint.successType) ~ str(">().await?") ~ ch(';') ~ newline ~
+        indent(4) ~ str("Ok") ~ parentheses(str("body")) ~ newline ~
+        indent(3) ~ ch('}') ~ newline ~
+        errorDecoding.repeatWithSep0(newline)(Chunk.fromIterable(endpoint.errors.map((k, v) => (endpoint.errorType, k.code, v)))) ~ newline ~
+        indent(3) ~ str("_") ~~ str("=>") ~~ str("Err") ~ parentheses(
+          typename(endpoint.errorType) ~ dcolon ~ str("UnexpectedStatus") ~ parentheses(str("result.status()"))
+        ) ~ newline ~
+        indent(2) ~ ch('}') ~ newline ~
+        indent(1) ~ ch('}') ~ newline
+
+  private def errorDecoding: Rust[(RustType, Int, RustEndpoint.EndpointErrorCase)] =
+    Printer.byValue:
+      case (errorType, status, RustEndpoint.EndpointErrorCase.Simple(_)) =>
+        indent(3) ~ str(status.toString) ~~ str("=>") ~~ str("Err") ~ parentheses(
+          typename(errorType) ~ dcolon ~ str(s"Status${status}")
+        ) ~ comma
+      case (errorType, status, RustEndpoint.EndpointErrorCase.Inlined(fields, cname, errorAdtType, errorAdtName, _)) =>
+        indent(3) ~ str(status.toString) ~~ str("=>") ~~ ch('{') ~ newline ~
+          indent(4) ~ str("let body") ~~ ch('=') ~~ str("result.json::<") ~ name(errorAdtName ++ cname + "Payload") ~ str(">().await?") ~ ch(';') ~ newline ~
+          indent(4) ~ str("Err") ~ parentheses(
+            typename(errorType) ~ dcolon ~ str(s"Status${status}") ~~ ch('{') ~~ fieldsFromStruct(Name.fromString("body"))(fields) ~~ ch('}')
+          ) ~ newline ~
+          indent(3) ~ ch('}')
+      case (errorType, status, RustEndpoint.EndpointErrorCase.ExternalType(tpe)) =>
+        indent(3) ~ str(status.toString) ~~ str("=>") ~~ ch('{') ~ newline ~
+          indent(4) ~ str("let body") ~~ ch('=') ~~ str("result.json::<") ~ typename(tpe) ~ str(">().await?") ~ ch(';') ~ newline ~
+          indent(4) ~ str("Err") ~ parentheses(typename(errorType) ~ dcolon ~ str(s"Status${status}") ~ parentheses(str("body"))) ~ newline ~
+          indent(3) ~ ch('}')
+
+  def errorAdtConversion: Rust[(Name, Map[Int, RustEndpoint.EndpointErrorCase], RustType)] =
+    Printer.byValue: (name, cases, errorType) =>
+      str("match self") ~~ ch('{') ~ newline ~
+        errorAdtConversionCase.*(Chunk.fromIterable(cases.map((k, v) => (k, (v, name, errorType))))) ~
+        indent(3) ~ ch('_') ~~ str("=>") ~~ str("None") ~ newline ~
+        indent(2) ~ ch('}')
+
+  private def errorAdtConversionCase: Rust[(Int, (RustEndpoint.EndpointErrorCase, Name, RustType))] =
+    Printer.byValue:
+      case (status, (RustEndpoint.EndpointErrorCase.Simple(cname), n, errorType)) =>
+        indent(3) ~ name(n) ~ dcolon ~ str(s"Status${status}") ~~ str("=>") ~~ str("Some") ~ parentheses(
+          typename(errorType) ~ dcolon ~ name(cname)
+        ) ~ comma ~ newline
+      case (status, (RustEndpoint.EndpointErrorCase.Inlined(fields, cname, _, _, _), n, errorType)) =>
+        indent(3) ~ name(n) ~ dcolon ~ str(s"Status${status}") ~~ ch('{') ~~ structFieldPatterns(fields) ~~ ch('}') ~~ str("=>") ~~
+          str("Some") ~ parentheses(typename(errorType) ~ dcolon ~ name(cname) ~~ ch('{') ~~ clonedFields(fields) ~~ ch('}')) ~
+          comma ~ newline
+      case (status, (RustEndpoint.EndpointErrorCase.ExternalType(_), _, _)) => Printer.unit
+
+  private def structFieldPatterns: Rust[Chunk[RustDef.Field]] =
+    structFieldPattern.repeatWithSep0(comma)
+
+  private def structFieldPattern: Rust[RustDef.Field] =
+    Printer.byValue: field =>
+      name(field.name)
+
+  private def clonedFields: Rust[Chunk[RustDef.Field]] =
+    clonedField.repeatWithSep0(comma)
+
+  private def clonedField: Rust[RustDef.Field] =
+    Printer.byValue: field =>
+      name(field.name) ~ ch(':') ~~ name(field.name) ~ str(".clone()")
+
+  private def fieldsFromStruct(n: Name): Rust[Chunk[RustDef.Field]] =
+    fieldFromStruct(n).repeatWithSep0(comma)
+
+  private def fieldFromStruct(n: Name): Rust[RustDef.Field] =
+    Printer.byValue: field =>
+      name(field.name) ~ ch(':') ~~ name(n) ~ ch('.') ~ name(field.name)
 
   private def parameterList: Rust[Chunk[(Name, RustType)]] =
     str("&self") ~ comma ~ (parameterName ~ ch(':') ~~ typename).repeatWithSep0(comma)

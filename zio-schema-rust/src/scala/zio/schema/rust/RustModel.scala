@@ -315,7 +315,7 @@ object RustModel:
 
                     rustFields.map: fields =>
                       RustDef
-                        .struct(Name.fromString(record.id.name), fields: _*)
+                        .pubStruct(Name.fromString(record.id.name), fields: _*)
                   case _ =>
                     // Otherwise we generate the constructor type separately and just refer to it
                     process(constructor.schema) *>
@@ -360,7 +360,7 @@ object RustModel:
                 fields <- rustFields
                 _ <- addDef(
                   RustDef
-                    .struct(Name.fromString(record.id.name), fields: _*)
+                    .pubStruct(Name.fromString(record.id.name), fields: _*)
                     .derive(RustType.debug)
                     .derive(RustType.rustClone)
                     .derive(RustType.partialEq)
