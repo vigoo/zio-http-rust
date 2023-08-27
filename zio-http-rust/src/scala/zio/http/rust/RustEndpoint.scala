@@ -1,6 +1,6 @@
 package zio.http.rust
 
-import zio.Chunk
+import zio.{Chunk, IO, ZIO}
 import zio.http.{Method, Status}
 import zio.http.codec.{HttpCodec, HttpCodecType, PathCodec, SegmentCodec, SimpleCodec, TextCodec}
 import zio.http.endpoint.*
@@ -118,7 +118,8 @@ object RustEndpoint:
       possibleOutputStack: List[PossibleOutput],
       outputs: Map[Status, RustType],
       errors: Map[Status, RustType],
-      requiredCrates: Set[Crate]
+      requiredCrates: Set[Crate],
+      knownErrorAdt: Option[Schema[?]]
   ):
     def addBody(name: Name, tpe: RustType, schema: Schema[?]): State =
       copy(
@@ -164,14 +165,24 @@ object RustEndpoint:
         case None => this
         case Some(status) =>
           val newOutputs = if !isError then outputs.updated(status, tpe) else outputs
-          val newErrors = if isError then errors.updated(status, tpe) else errors
-          val newReferredSchemas = referredSchemas + schema
+          val isErrorCons = isError && isConstructorOfKnownErrorAdt(schema)
+          val newErrors =
+            if isError then
+              if isErrorCons then errors.updated(status, RustType.unit) // TODO
+              else errors.updated(status, tpe)
+            else errors
+          val newReferredSchemas = if isErrorCons then referredSchemas else referredSchemas + schema
           copy(
             possibleOutputStack = newPossibleOutputStack,
             outputs = newOutputs,
             errors = newErrors,
             referredSchemas = newReferredSchemas
           )
+
+    private def isConstructorOfKnownErrorAdt(schema: Schema[?]): Boolean =
+      knownErrorAdt.exists:
+        case sum: Schema.Enum[_] => sum.cases.exists(_.schema == schema)
+        case _                   => false
 
   object State:
     val empty: State =
@@ -185,14 +196,16 @@ object RustEndpoint:
         possibleOutputStack = List.empty,
         outputs = Map.empty,
         errors = Map.empty,
-        requiredCrates = Set.empty
+        requiredCrates = Set.empty,
+        knownErrorAdt = None
       )
 
   type Fx[+A] = ZPure[Nothing, State, State, Any, String, A]
 
   def fromEndpoint[PathInput, Input, Err, Output, Middleware <: EndpointMiddleware](
       name: String,
-      endpoint: Endpoint[PathInput, Input, Err, Output, Middleware]
+      endpoint: Endpoint[PathInput, Input, Err, Output, Middleware],
+      knownErrorAdt: Option[Schema[?]] = None
   ): Either[String, RustEndpoint] =
     val builder =
       for {
@@ -206,7 +219,7 @@ object RustEndpoint:
         state <- getState
       } yield state
 
-    builder.provideState(State.empty).runEither.map(postProcess(name, _))
+    builder.provideState(State.empty.copy(knownErrorAdt = knownErrorAdt, referredSchemas = knownErrorAdt.toSet)).runEither.map(postProcess(name, _))
 
   private def postProcess(name: String, state: State): RustEndpoint =
     RustEndpoint(
@@ -299,10 +312,8 @@ object RustEndpoint:
         ZPure.unit
       case HttpCodec.TransformOrFail(api, f, g) =>
         addInput(api)
-      case HttpCodec.WithDoc(in, doc) =>
-        addInput(in)
-      case HttpCodec.WithExamples(in, examples) =>
-        addInput(in)
+      case HttpCodec.Annotated(codec, metadata) =>
+        addInput(codec)
 
   private def addOutput[Output](output: HttpCodec[HttpCodecType.ResponseType, Output], isError: Boolean): Fx[Unit] =
     output match
@@ -351,16 +362,14 @@ object RustEndpoint:
 
       case HttpCodec.TransformOrFail(api, f, g) =>
         addOutput(api, isError)
-      case HttpCodec.WithDoc(in, doc) =>
-        addOutput(in, isError)
-      case HttpCodec.WithExamples(in, examples) =>
-        addOutput(in, isError)
       case HttpCodec.Path(codec, index) =>
         ZPure.fail("Unexpected codec in output position")
       case HttpCodec.Query(name, codec, index) =>
         ZPure.fail("Unexpected codec in output position")
       case HttpCodec.Method(codec, index) =>
         ZPure.fail("Unexpected codec in output position")
+      case HttpCodec.Annotated(codec, metadata) =>
+        addOutput(codec, isError)
 
   private def addPath[Input](codec: PathCodec[Input]): Fx[Unit] =
     codec match
@@ -384,3 +393,17 @@ object RustEndpoint:
             updateState(_.addPathSegment(RustPathSegment.Trailing))
       case PathCodec.Concat(left, right, combiner, doc) =>
         addPath(left) *> addPath(right)
+      case PathCodec.TransformOrFail(api, f, g) =>
+        addPath(api)
+
+  def withKnownErrorAdt[A](using Schema[A]): WithKnownErrorAdt =
+    WithKnownErrorAdt(Schema[A])
+
+  class WithKnownErrorAdt(knownErrorAdt: Schema[?]):
+    def zio: [PathInput, Input, Err, Output, Middleware <: EndpointMiddleware] => (
+        String,
+        Endpoint[PathInput, Input, Err, Output, Middleware]
+    ) => IO[String, RustEndpoint] =
+      [PathInput, Input, Err, Output, Middleware <: EndpointMiddleware] =>
+        (name: String, endpoint: Endpoint[PathInput, Input, Err, Output, Middleware]) =>
+          ZIO.fromEither(RustEndpoint.fromEndpoint(name, endpoint, Some(knownErrorAdt)))

@@ -17,8 +17,11 @@ enum RustDef:
     case Enum(name, cases, derives)    => Enum(name, cases, derives :+ tpe)
     case _                             => this
 
+  def deriveIf(condition: => Boolean)(tpe: RustType): RustDef =
+    if condition then derive(tpe) else this
+
 object RustDef:
-  final case class Field(name: Name, tpe: RustType, attributes: Chunk[RustAttribute] = Chunk.empty)
+  final case class Field(name: Name, tpe: RustType, attributes: Chunk[RustAttribute] = Chunk.empty, isPublic: Boolean = true)
 
   enum ParameterModifier:
     case None

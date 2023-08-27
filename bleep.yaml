@@ -8,31 +8,31 @@ resolvers:
 projects:
   tests:
     dependencies:
-      - dev.zio::zio-test:2.0.15
+      - dev.zio::zio-test:2.0.16
     dependsOn: zio-schema-rust
     extends: template-common
     isTestProject: true
   zio-rust-codegen:
     dependencies:
-      - dev.zio::zio:2.0.15
+      - dev.zio::zio:2.0.16
       - dev.zio::zio-nio:2.0.1
       - dev.zio::zio-parser:0.1.9
       - dev.zio::zio-prelude:1.0.0-RC19
       - dev.zio::zio-schema:0.4.13
-      - dev.zio::zio-streams:2.0.15
+      - dev.zio::zio-streams:2.0.16
     extends: template-common
   zio-schema-rust:
     dependsOn:
       - zio-rust-codegen
     dependencies:
-      - dev.zio::zio:2.0.15
+      - dev.zio::zio:2.0.16
       - dev.zio::zio-nio:2.0.1
       - dev.zio::zio-parser:0.1.9
       - dev.zio::zio-prelude:1.0.0-RC19
       - dev.zio::zio-schema:0.4.13
       - dev.zio::zio-schema-derivation:0.4.13
       - dev.zio::zio-schema-json:0.4.13
-      - dev.zio::zio-streams:2.0.15
+      - dev.zio::zio-streams:2.0.16
     extends: template-common
     platform:
       mainClass: zio.schema.rust.Playground
@@ -41,20 +41,26 @@ projects:
       - zio-rust-codegen
       - zio-schema-rust
     dependencies:
-      - dev.zio::zio-http:3.0.0-RC2+45-e3636f00-SNAPSHOT
+      - dev.zio::zio-http:3.0.0-RC2+63-eea2a6bd-SNAPSHOT
     extends: template-common
   rust-client-generator:
     dependsOn:
       - zio-http-rust
       - zio-schema-rust
     dependencies:
-      - dev.zio::zio:2.0.15
+      - dev.zio::zio:2.0.16
       - dev.zio::zio-nio:2.0.1
       - dev.zio::zio-parser:0.1.9
       - dev.zio::zio-prelude:1.0.0-RC19
       - dev.zio::zio-schema:0.4.13
       - dev.zio::zio-schema-derivation:0.4.13
-      - dev.zio::zio-streams:2.0.15
+      - dev.zio::zio-streams:2.0.16
+      - com.thesamet.scalapb::lenses:0.11.13
+      - com.thesamet.scalapb::scalapb-runtime:0.11.13
+      - com.thesamet.scalapb::scalapb-runtime-grpc:0.11.13
+      - com.thesamet.scalapb.zio-grpc::zio-grpc-core:0.6.0-rc5
+      - io.grpc:grpc-core:1.47.1
+      - io.grpc:grpc-services:1.47.1
     extends: template-common
 templates:
   template-common:

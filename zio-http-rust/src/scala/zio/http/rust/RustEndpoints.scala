@@ -2,6 +2,7 @@ package zio.http.rust
 
 import zio.Chunk
 import zio.rust.codegen.ast.{Crate, Name, RustDef}
+import zio.schema.Schema
 
 final case class RustEndpoints(name: Name, endpoints: Chunk[RustEndpoint]):
   def ++(endpoint: RustEndpoint): RustEndpoints = this.copy(endpoints = endpoints :+ endpoint)

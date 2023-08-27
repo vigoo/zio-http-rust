@@ -65,7 +65,7 @@ object Rust:
         ch(';')
     case RustDef.Struct(n, fields, ds) =>
       indent(level) ~ derives(ds) ~ str("pub struct") ~~ name(n) ~~ ch('{') ~ newline ~
-        structFields(fields) ~ ch('}')
+        structFields(1)(fields) ~ ch('}')
     case RustDef.Enum(n, cases, ds) =>
       indent(level) ~ derives(ds) ~ str("pub enum") ~~ name(n) ~~ ch('{') ~ newline ~
         enumCases(cases) ~ ch('}')
@@ -101,12 +101,12 @@ object Rust:
       if types.isEmpty then Printer.unit
       else str("#[derive(") ~ typename.repeatWithSep(comma)(types) ~ str(")]\n")
 
-  private def structFields: Rust[Chunk[RustDef.Field]] =
-    structField.*
+  private def structFields(level: Int = 1): Rust[Chunk[RustDef.Field]] =
+    structField(level).*
 
-  private def structField: Rust[RustDef.Field] = Printer.byValue: field =>
-    (indent ~ attribute).*(field.attributes) ~
-      indent ~ str("pub ") ~ name(field.name) ~ str(":") ~~ typename(field.tpe) ~ ch(',') ~ newline
+  private def structField(level: Int = 1): Rust[RustDef.Field] = Printer.byValue: field =>
+    (indent(level) ~ attribute).*(field.attributes) ~
+      indent(level) ~ (if field.isPublic then str("pub ") else Printer.unit) ~ name(field.name) ~ str(":") ~~ typename(field.tpe) ~ ch(',') ~ newline
 
   def name: Rust[Name] =
     Printer.anyString.contramap(_.asString)
@@ -123,8 +123,8 @@ object Rust:
           '\n'
         )
     case RustDef.Struct(n, fields, _) =>
-      indent ~~ name(n) ~~ ch('{') ~ newline ~
-        structFields(fields) ~ ch('}') ~ ch(',')
+      indent ~ name(n) ~~ ch('{') ~ newline ~
+        structFields(2)(fields) ~ indent ~ ch('}') ~ ch(',') ~ newline
     case _ =>
       Printer.fail("Only newtypes and structs are supported as enum cases")
 

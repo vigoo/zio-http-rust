@@ -32,7 +32,13 @@ object RustType:
 
   val rustClone: RustType = primitive("Clone")
   val debug: RustType = primitive("Debug")
-  val json: RustType = module("json").primitive("JsonValue")
+  val eq: RustType = primitive("Eq")
+  val hash: RustType = primitive("Hash")
+  val ord: RustType = primitive("Ord")
+  val partialEq: RustType = primitive("PartialEq")
+  val partialOrd: RustType = primitive("PartialOrd")
+
+  val json: RustType = module("serde_json", "value").primitive("Value")
   val month: RustType = module("chrono").primitive("Month")
   val year: RustType = crate().primitive("Year")
   val uuid: RustType = module("uuid").primitive("Uuid")
@@ -72,13 +78,19 @@ object RustType:
       case StandardType.ZoneIdType         => module("chrono").primitive("TimeZone")
       case StandardType.ZoneOffsetType     => module("chrono").primitive("FixedOffset")
       case StandardType.DurationType       => module("std", "time").primitive("Duration")
-      case StandardType.InstantType        => module("std", "time").primitive("Instant")
+      case StandardType.InstantType        => module("chrono").parametric("DateTime", module("chrono").primitive("Utc"))
       case StandardType.LocalDateType      => module("chrono", "naive").primitive("NaiveDate")
       case StandardType.LocalTimeType      => module("chrono", "naive").primitive("NaiveTime")
       case StandardType.LocalDateTimeType  => module("chrono").parametric("DateTime", module("chrono").primitive("Local"))
       case StandardType.OffsetTimeType     => module("chrono", "naive").primitive("NaiveTime")
       case StandardType.OffsetDateTimeType => module("chrono").parametric("DateTime", module("chrono").primitive("FixedOffset"))
       case StandardType.ZonedDateTimeType  => module("chrono").parametric("DateTime", module("chrono").primitive("FixedOffset"))
+
+  def btreeMap(keyType: RustType, valueType: RustType): RustType =
+    module("std", "collections").parametric("BTreeMap", keyType, valueType)
+
+  def btreeSet(elemType: RustType): RustType =
+    module("std", "collections").parametric("BTreeSet", elemType)
 
   def hashMap(keyType: RustType, valueType: RustType): RustType =
     module("std", "collections").parametric("HashMap", keyType, valueType)
@@ -124,7 +136,7 @@ object RustType:
       case StandardType.ZoneIdType         => Set(Crate.chrono, Crate.chronoTz)
       case StandardType.ZoneOffsetType     => Set(Crate.chrono)
       case StandardType.DurationType       => Set.empty
-      case StandardType.InstantType        => Set.empty
+      case StandardType.InstantType        => Set(Crate.chrono)
       case StandardType.LocalDateType      => Set(Crate.chrono)
       case StandardType.LocalTimeType      => Set(Crate.chrono)
       case StandardType.LocalDateTimeType  => Set(Crate.chrono)
@@ -180,7 +192,7 @@ final case class RustTypeInModule(path: Chunk[String]):
     RustTypeInModule(path :+ name)
 
   def parametric(name: String, args: RustType*): RustType =
-    RustType.Parametric(name, Chunk.fromIterable(args))
+    RustType.SelectFromModule(path, RustType.Parametric(name, Chunk.fromIterable(args)))
 
   def primitive(name: String): RustType =
     RustType.SelectFromModule(path, RustType.primitive(name))
