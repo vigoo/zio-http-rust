@@ -12,11 +12,11 @@ enum RustDef:
   case Function(name: Name, parameters: Chunk[RustDef.Parameter], returnType: RustType, body: String, isPublic: Boolean)
 
   def derive(tpe: RustType): RustDef = this match
-    case TypeAlias(name, typ, derives) => TypeAlias(name, typ, derives :+ tpe)
-    case Newtype(name, typ, derives)   => Newtype(name, typ, derives :+ tpe)
+    case TypeAlias(name, typ, derives)           => TypeAlias(name, typ, derives :+ tpe)
+    case Newtype(name, typ, derives)             => Newtype(name, typ, derives :+ tpe)
     case Struct(name, fields, derives, isPublic) => Struct(name, fields, derives :+ tpe, isPublic)
-    case Enum(name, cases, derives)    => Enum(name, cases, derives :+ tpe)
-    case _                             => this
+    case Enum(name, cases, derives)              => Enum(name, cases, derives :+ tpe)
+    case _                                       => this
 
   def deriveIf(condition: => Boolean)(tpe: RustType): RustDef =
     if condition then derive(tpe) else this
