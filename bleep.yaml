@@ -62,6 +62,13 @@ projects:
       - io.grpc:grpc-core:1.47.1
       - io.grpc:grpc-services:1.47.1
     extends: template-common
+  scripts:
+    dependencies:
+      - build.bleep::bleep-plugin-ci-release:${BLEEP_VERSION}
+    scala:
+      version: 3.3.0
+    platform:
+      name: jvm
 templates:
   template-common:
     platform:
@@ -70,3 +77,10 @@ templates:
       options: -encoding utf8 -feature -unchecked
       strict: true
       version: 3.3.0
+scripts:
+  my-publish-local:
+    main: zio.http.rust.scripts.PublishLocal
+    project: scripts
+  publish:
+    main: zio.http.rust.scripts.Publish
+    project: scripts
