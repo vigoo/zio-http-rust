@@ -75,6 +75,7 @@ final case class RustEndpoint(
         RustDef.`enum`(
           errorTypeName,
           RustDef.newtype(Name.fromString("RequestFailure"), RustType.module("reqwest").primitive("Error")) +:
+            RustDef.newtype(Name.fromString("InvalidHeaderValue"), RustType.module("reqwest", "header").primitive("InvalidHeaderValue")) +:
             RustDef.newtype(Name.fromString("UnexpectedStatus"), RustType.module("reqwest").primitive("StatusCode")) +:
             errors
               .map:
@@ -96,6 +97,18 @@ final case class RustEndpoint(
             ),
             errorType,
             errorTypeName.asString + "::RequestFailure(error)"
+          )
+        ),
+        RustDef.impl(
+          RustType.parametric("From", RustType.module("reqwest", "header").primitive("InvalidHeaderValue")),
+          errorType,
+          RustDef.fn(
+            Name.fromString("from"),
+            Chunk(
+              RustDef.Parameter.Named(ParameterModifier.None, Name.fromString("error"), RustType.module("reqwest", "header").primitive("InvalidHeaderValue"))
+            ),
+            errorType,
+            errorTypeName.asString + "::InvalidHeaderValue(error)"
           )
         )
       ),

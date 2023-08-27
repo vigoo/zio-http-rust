@@ -40,10 +40,18 @@ object RustClient:
       ) ~~ ch('{') ~ newline ~
         indent(2) ~ str("let mut url") ~~ ch('=') ~~ str("self.base_url.clone()") ~ ch(';') ~ newline ~
         indent(2) ~ str("url.set_path") ~ parentheses(str(endpoint.pathExpression)) ~ ch(';') ~ newline ~
-        //         url.query_pairs_mut().append_pair(name, value);
+        queryParameters(endpoint.queryParameters) ~ newline ~
+        (if (endpoint.headers.nonEmpty) then
+           indent(2) ~ str("let mut headers") ~~ ch('=') ~~ typename(reqwestHeaderMap) ~ dcolon ~ str("new();") ~ newline ~
+             headers(endpoint.headers) ~ newline
+         else Printer.unit ~ newline) ~
         indent(2) ~ str("let result") ~~ ch('=') ~~ typename(reqwestClient) ~ dcolon ~ str("builder()") ~ newline ~
         indent(3) ~ str(".build()?") ~ newline ~
         indent(3) ~ ch('.') ~ str(endpoint.method.toLowerCase) ~ parentheses(str("url")) ~ newline ~
+        (if endpoint.headers.nonEmpty then indent(3) ~ str(".headers(headers)") ~ newline
+         else Printer.unit) ~
+        (if endpoint.bodies.size == 1 then indent(3) ~ str(".json") ~ parentheses(ch('&') ~ name(endpoint.bodies.head._1)) ~ newline
+         else Printer.unit) ~
         indent(3) ~ str(".send()") ~ newline ~
         indent(3) ~ str(".await?") ~ ch(';') ~ newline ~
         indent(2) ~ str("match") ~~ str("result.status().as_u16()") ~~ ch('{') ~ newline ~
@@ -57,6 +65,47 @@ object RustClient:
         ) ~ newline ~
         indent(2) ~ ch('}') ~ newline ~
         indent(1) ~ ch('}') ~ newline
+
+  private def queryParameters: Rust[Chunk[RustParameter]] =
+    queryParameter.repeatWithSep0(newline)
+
+  private def queryParameter: Rust[RustParameter] =
+    Printer.byValue:
+      case RustParameter.Static(n, value) =>
+        indent(2) ~ str("url.query_pairs_mut().append_pair") ~ parentheses(ch('"') ~ name(n) ~ ch('"') ~ comma ~ ch('"') ~ str(value) ~ ch('"')) ~ ch(';')
+      case RustParameter.Parameter(n, RustType.Option(tpe)) =>
+        indent(2) ~ str("if let Some(value) = ") ~ name(n.toSnakeCase) ~ str(" {") ~ newline ~
+          indent(3) ~ str("url.query_pairs_mut().append_pair") ~ parentheses(
+            ch('"') ~ name(n) ~ ch('"') ~ comma ~ str("&format!(\"{value}\")")
+          ) ~ ch(';') ~ newline ~
+          indent(2) ~ ch('}')
+      case RustParameter.Parameter(n, _) =>
+        indent(2) ~ str("url.query_pairs_mut().append_pair") ~ parentheses(
+          ch('"') ~ name(n) ~ ch('"') ~ comma ~ str("&format!(\"{") ~ name(n.toSnakeCase) ~ str("}\")")
+        ) ~ ch(';')
+
+  private def headers: Rust[Chunk[RustParameter]] =
+    header.repeatWithSep0(newline)
+
+  private def header: Rust[RustParameter] =
+    Printer.byValue:
+      case RustParameter.Static(n, value) =>
+        indent(2) ~ str("headers.append") ~ parentheses(
+          ch('"') ~ name(n) ~ ch('"') ~ comma ~ typename(reqwestHeaderValue) ~ dcolon ~ str("from_str") ~ parentheses(ch('"') ~ str(value) ~ ch('"')) ~ ch('?')
+        ) ~ ch(';')
+      case RustParameter.Parameter(n, RustType.Option(tpe)) =>
+        indent(2) ~ str("if let Some(value) = ") ~ name(n.toSnakeCase) ~ str(" {") ~ newline ~
+          indent(3) ~ str("headers.append") ~ parentheses(
+            ch('"') ~ name(n) ~ ch('"') ~ comma ~
+              typename(reqwestHeaderValue) ~ dcolon ~ str("from_str") ~ parentheses(str("&format!(\"{value}\")")) ~ ch('?')
+          ) ~ ch(';') ~ newline ~
+          indent(2) ~ ch('}')
+      case RustParameter.Parameter(n, _) =>
+        indent(2) ~ str("headers.append") ~ parentheses(
+          ch('"') ~ name(n) ~ ch('"') ~ comma ~ typename(reqwestHeaderValue) ~ dcolon ~ str("from_str") ~ parentheses(
+            str("&format!(\"{") ~ name(n.toSnakeCase) ~ str("}\")")
+          ) ~ ch('?')
+        ) ~ ch(';')
 
   private def errorDecoding: Rust[(RustType, Int, RustEndpoint.EndpointErrorCase)] =
     Printer.byValue:
@@ -125,3 +174,5 @@ object RustClient:
 
   private def reqwestClient: RustType = RustType.module("reqwest").primitive("Client")
   private def reqwestUrl: RustType = RustType.module("reqwest").primitive("Url")
+  private def reqwestHeaderMap: RustType = RustType.module("reqwest", "header").primitive("HeaderMap")
+  private def reqwestHeaderValue: RustType = RustType.module("reqwest", "header").primitive("HeaderValue")
