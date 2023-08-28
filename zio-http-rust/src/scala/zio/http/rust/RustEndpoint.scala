@@ -355,7 +355,7 @@ object RustEndpoint:
           .flatMap: model =>
             val baseTypeRef = model.typeRefs(schema)
             val typeRef = if optional then RustType.optional(baseTypeRef) else baseTypeRef
-            updateState(_.addBody(Name.fromString(name.getOrElse("body")), typeRef, schema))
+            updateState(state => state.addBody(Name.fromString(name.getOrElse("field" + state.bodies.size)), typeRef, schema))
       case HttpCodec.ContentStream(schema, mediaType, name, index) =>
         ZPure
           .fromEither(RustModel.fromSchema(schema))
@@ -363,7 +363,7 @@ object RustEndpoint:
             val elemTypeRef = model.typeRefs(schema)
             val streamTypeRef = RustType.vec(elemTypeRef)
             val typeRef = if optional then RustType.optional(streamTypeRef) else streamTypeRef
-            updateState(_.addBody(Name.fromString(name.getOrElse("body")), typeRef, schema))
+            updateState(state => state.addBody(Name.fromString(name.getOrElse("field" + state.bodies.size)), typeRef, schema))
       case HttpCodec.Empty =>
         ZPure.unit
       case HttpCodec.Fallback(left, HttpCodec.Empty) =>

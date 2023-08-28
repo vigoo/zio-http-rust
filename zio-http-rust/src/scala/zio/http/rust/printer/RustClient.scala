@@ -1,6 +1,7 @@
 package zio.http.rust.printer
 
 import zio.Chunk
+import zio.http.Status
 import zio.http.rust.*
 import zio.parser.*
 import zio.rust.codegen.ast.{Name, RustAttribute, RustDef, RustType}
@@ -35,6 +36,10 @@ object RustClient:
 
   def implFn: Rust[RustEndpoint] =
     Printer.byValue: endpoint =>
+      val decodeSuccessfulBody =
+        if endpoint.outputs(Status.Ok) == RustType.vec(RustType.u8) then str("result.bytes().await?.to_vec()")
+        else str("result.json::<") ~ typename(endpoint.successType) ~ str(">().await?")
+
       indent ~ str("async fn") ~~ name(endpoint.name.toSnakeCase) ~ parentheses(parameterList(endpoint.allParameters)) ~~ str("->") ~~ typename(
         endpoint.resultType
       ) ~~ ch('{') ~ newline ~
@@ -44,19 +49,24 @@ object RustClient:
         (if (endpoint.headers.nonEmpty) then
            indent(2) ~ str("let mut headers") ~~ ch('=') ~~ typename(reqwestHeaderMap) ~ dcolon ~ str("new();") ~ newline ~
              headers(endpoint.headers) ~ newline
-         else Printer.unit ~ newline) ~
+         else Printer.unit) ~
+        (if endpoint.bodies.size > 1 then
+           indent(2) ~ str("let form") ~~ ch('=') ~~ typename(reqwestMultipartForm) ~ dcolon ~ str("new()") ~ newline ~
+             formParts(endpoint.bodies) ~ ch(';') ~ newline
+         else Printer.unit) ~
         indent(2) ~ str("let result") ~~ ch('=') ~~ typename(reqwestClient) ~ dcolon ~ str("builder()") ~ newline ~
         indent(3) ~ str(".build()?") ~ newline ~
         indent(3) ~ ch('.') ~ str(endpoint.method.toLowerCase) ~ parentheses(str("url")) ~ newline ~
         (if endpoint.headers.nonEmpty then indent(3) ~ str(".headers(headers)") ~ newline
          else Printer.unit) ~
         (if endpoint.bodies.size == 1 then indent(3) ~ str(".json") ~ parentheses(ch('&') ~ name(endpoint.bodies.head._1)) ~ newline
+         else if endpoint.bodies.size > 1 then indent(3) ~ str(".multipart(form)") ~ newline
          else Printer.unit) ~
         indent(3) ~ str(".send()") ~ newline ~
         indent(3) ~ str(".await?") ~ ch(';') ~ newline ~
         indent(2) ~ str("match") ~~ str("result.status().as_u16()") ~~ ch('{') ~ newline ~
         indent(3) ~ str("200") ~~ str("=>") ~~ ch('{') ~ newline ~
-        indent(4) ~ str("let body") ~~ ch('=') ~~ str("result.json::<") ~ typename(endpoint.successType) ~ str(">().await?") ~ ch(';') ~ newline ~
+        indent(4) ~ str("let body") ~~ ch('=') ~~ decodeSuccessfulBody ~ ch(';') ~ newline ~
         indent(4) ~ str("Ok") ~ parentheses(str("body")) ~ newline ~
         indent(3) ~ ch('}') ~ newline ~
         errorDecoding.repeatWithSep0(newline)(Chunk.fromIterable(endpoint.errors.map((k, v) => (endpoint.errorType, k.code, v)))) ~ newline ~
@@ -65,6 +75,22 @@ object RustClient:
         ) ~ newline ~
         indent(2) ~ ch('}') ~ newline ~
         indent(1) ~ ch('}') ~ newline
+
+  private def formParts: Rust[Chunk[(Name, RustType)]] =
+    formPart.repeatWithSep0(newline)
+
+  private def formPart: Rust[(Name, RustType)] =
+    Printer.byValue: (n, tpe) =>
+      val partValue =
+        if tpe == RustType.str then typename(reqwestMultipartPart) ~ dcolon ~ str("text") ~ parentheses(name(n.toSnakeCase))
+        else if tpe == RustType.string then typename(reqwestMultipartPart) ~ dcolon ~ str("text") ~ parentheses(ch('&') ~ name(n.toSnakeCase))
+        else if tpe == RustType.vec(RustType.u8) then
+          typename(reqwestMultipartPart) ~ dcolon ~ str("bytes") ~ parentheses(name(n.toSnakeCase)) ~ str(""".mime_str("application/octet-stream")""") ~ ch('?')
+        else
+          typename(reqwestMultipartPart) ~ dcolon ~ str("text") ~ parentheses(
+            str("serde_json") ~ dcolon ~ str("to_string") ~ parentheses(ch('&') ~ name(n.toSnakeCase)) ~ str(""".expect("Failed to serialize value to JSON")""")
+          ) ~ str(""".mime_str("application/json")""") ~ ch('?')
+      indent(3) ~ str(".part") ~ parentheses(ch('"') ~ name(n) ~ ch('"') ~ comma ~ partValue)
 
   private def queryParameters: Rust[Chunk[RustParameter]] =
     queryParameter.repeatWithSep0(newline)
@@ -176,3 +202,5 @@ object RustClient:
   private def reqwestUrl: RustType = RustType.module("reqwest").primitive("Url")
   private def reqwestHeaderMap: RustType = RustType.module("reqwest", "header").primitive("HeaderMap")
   private def reqwestHeaderValue: RustType = RustType.module("reqwest", "header").primitive("HeaderValue")
+  private def reqwestMultipartForm: RustType = RustType.module("reqwest", "multipart").primitive("Form")
+  private def reqwestMultipartPart: RustType = RustType.module("reqwest", "multipart").primitive("Part")

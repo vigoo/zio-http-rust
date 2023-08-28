@@ -41,7 +41,7 @@ object Publish extends BleepScript("Publish") {
           "vigoo",
           "Daniel Vigovszky",
           "https://github.com/vigoo"
-        ),
+        )
       ),
       publication = None,
       scm = CiReleasePlugin.inferScmInfo,
