@@ -27,7 +27,7 @@ object Publish extends BleepScript("Publish") {
       sonatypeProfileName = groupId,
       bundleName = "zio-http-rust",
       version = dynVer.version,
-      sonatypeCredentialHost = Sonatype.sonatypeLegacy
+      sonatypeCredentialHost = Sonatype.sonatype01
     )
     val ciRelease = new CiReleasePlugin(started.logger, sonatype, dynVer, pgp)
 
