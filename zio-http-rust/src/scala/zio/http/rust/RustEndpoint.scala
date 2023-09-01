@@ -10,7 +10,6 @@ import zio.prelude.*
 import zio.prelude.fx.*
 import zio.rust.codegen.ast.RustDef.ParameterModifier
 import zio.rust.codegen.ast.{Crate, Name, RustDef, RustType}
-import zio.rust.codegen.printer.Rust
 import zio.schema.Schema
 import zio.schema.rust.RustModel
 
@@ -25,7 +24,9 @@ final case class RustEndpoint(
     outputs: Map[Status, RustType],
     errors: Map[Status, EndpointErrorCase],
     referredSchemas: Set[Schema[?]],
-    knownErrorAdt: Option[Schema[?]]
+    knownErrorAdt: Option[Schema[?]],
+    unifiedErrorTypeName: Option[Name],
+    generateUnifiedErrorType: Boolean
 ):
   def ++(other: RustEndpoint): RustEndpoints =
     RustEndpoints(Name.fromString("Api"), Chunk(this, other))
@@ -46,7 +47,7 @@ final case class RustEndpoint(
 
   def errorType: RustType = RustType.primitive(errorTypeName.asString)
 
-  def errorTypeName: Name = name.toPascalCase + "Error"
+  def errorTypeName: Name = unifiedErrorTypeName.getOrElse(name.toPascalCase + "Error")
 
   def resultType: RustType =
     RustType.result(
@@ -71,48 +72,50 @@ final case class RustEndpoint(
           )
         )
       else Chunk.empty,
-      Chunk(
-        RustDef.`enum`(
-          errorTypeName,
-          RustDef.newtype(Name.fromString("RequestFailure"), RustType.module("reqwest").primitive("Error")) +:
-            RustDef.newtype(Name.fromString("InvalidHeaderValue"), RustType.module("reqwest", "header").primitive("InvalidHeaderValue")) +:
-            RustDef.newtype(Name.fromString("UnexpectedStatus"), RustType.module("reqwest").primitive("StatusCode")) +:
-            errors
-              .map:
-                case (status, EndpointErrorCase.ExternalType(tpe)) =>
-                  RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
-                case (status, EndpointErrorCase.Inlined(fields, _, _, _, _)) =>
-                  RustDef.pubStruct(Name.fromString(s"Status${status.code}"), fields: _*)
-                case (status, EndpointErrorCase.Simple(_)) =>
-                  RustDef.newtype(Name.fromString(s"Status${status.code}"), RustType.unit)
-              .toSeq: _*
-        ),
-        RustDef.impl(
-          RustType.parametric("From", RustType.module("reqwest").primitive("Error")),
-          errorType,
-          RustDef.fn(
-            Name.fromString("from"),
-            Chunk(
-              RustDef.Parameter.Named(ParameterModifier.None, Name.fromString("error"), RustType.module("reqwest").primitive("Error"))
-            ),
+      if unifiedErrorTypeName.isEmpty || generateUnifiedErrorType then
+        Chunk(
+          RustDef.`enum`(
+            errorTypeName,
+            RustDef.newtype(Name.fromString("RequestFailure"), RustType.module("reqwest").primitive("Error")) +:
+              RustDef.newtype(Name.fromString("InvalidHeaderValue"), RustType.module("reqwest", "header").primitive("InvalidHeaderValue")) +:
+              RustDef.newtype(Name.fromString("UnexpectedStatus"), RustType.module("reqwest").primitive("StatusCode")) +:
+              errors
+                .map:
+                  case (status, EndpointErrorCase.ExternalType(tpe)) =>
+                    RustDef.newtype(Name.fromString(s"Status${status.code}"), tpe)
+                  case (status, EndpointErrorCase.Inlined(fields, _, _, _, _)) =>
+                    RustDef.pubStruct(Name.fromString(s"Status${status.code}"), fields: _*)
+                  case (status, EndpointErrorCase.Simple(_)) =>
+                    RustDef.newtype(Name.fromString(s"Status${status.code}"), RustType.unit)
+                .toSeq: _*
+          ),
+          RustDef.impl(
+            RustType.parametric("From", RustType.module("reqwest").primitive("Error")),
             errorType,
-            errorTypeName.asString + "::RequestFailure(error)"
-          )
-        ),
-        RustDef.impl(
-          RustType.parametric("From", RustType.module("reqwest", "header").primitive("InvalidHeaderValue")),
-          errorType,
-          RustDef.fn(
-            Name.fromString("from"),
-            Chunk(
-              RustDef.Parameter.Named(ParameterModifier.None, Name.fromString("error"), RustType.module("reqwest", "header").primitive("InvalidHeaderValue"))
-            ),
+            RustDef.fn(
+              Name.fromString("from"),
+              Chunk(
+                RustDef.Parameter.Named(ParameterModifier.None, Name.fromString("error"), RustType.module("reqwest").primitive("Error"))
+              ),
+              errorType,
+              errorTypeName.asString + "::RequestFailure(error)"
+            )
+          ),
+          RustDef.impl(
+            RustType.parametric("From", RustType.module("reqwest", "header").primitive("InvalidHeaderValue")),
             errorType,
-            errorTypeName.asString + "::InvalidHeaderValue(error)"
+            RustDef.fn(
+              Name.fromString("from"),
+              Chunk(
+                RustDef.Parameter.Named(ParameterModifier.None, Name.fromString("error"), RustType.module("reqwest", "header").primitive("InvalidHeaderValue"))
+              ),
+              errorType,
+              errorTypeName.asString + "::InvalidHeaderValue(error)"
+            )
           )
         )
-      ),
-      if nonExternalErrors.nonEmpty && knownErrorAdt.nonEmpty then
+      else Chunk.empty,
+      if (unifiedErrorTypeName.isEmpty || generateUnifiedErrorType) && nonExternalErrors.nonEmpty && knownErrorAdt.nonEmpty then
         val knownErrorAdtEnum = knownErrorAdt.get.asInstanceOf[Schema.Enum[?]]
         val knownErrorAdtName = Name.fromString(knownErrorAdtEnum.id.name) // TODO: no cast
         Chunk(
@@ -334,7 +337,9 @@ object RustEndpoint:
       outputs = state.outputs,
       errors = state.errors,
       requiredCrates = state.requiredCrates,
-      state.knownErrorAdt
+      state.knownErrorAdt,
+      unifiedErrorTypeName = None,
+      generateUnifiedErrorType = false
     )
 
   private def getState: Fx[State] = ZPure.get[State]

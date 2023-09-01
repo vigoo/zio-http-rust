@@ -12,7 +12,6 @@ import java.nio.charset.StandardCharsets
 
 final case class ClientCrateGenerator(name: String, version: String, description: String, homepage: String, endpoints: Chunk[RustEndpoints]):
   private val allSchemas = endpoints.map(_.endpoints.toSet.flatMap(_.referredSchemas)).reduce(_ union _)
-  private val allExtraDefs = endpoints.map(_.endpoints.flatMap(_.extraDefs)).reduce(_ ++ _)
 
   def generate(targetDirectory: Path): ZIO[Any, Throwable, Unit] =
     for
