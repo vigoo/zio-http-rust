@@ -1,8 +1,10 @@
 package zio.rust.codegen.ast
 
 import zio.Chunk
-import zio.rust.codegen.ast.{Name, RustDef}
+import zio.rust.codegen.ast.Name
 import zio.schema.StandardType
+
+import scala.annotation.targetName
 
 enum RustType:
   case Primitive(name: String)
@@ -12,6 +14,14 @@ enum RustType:
   case Parametric(name: String, args: Chunk[RustType])
   case Tuple(args: Chunk[RustType])
   case Ref(inner: RustType)
+  case Impl(inner: RustType)
+  case Dyn(inner: RustType)
+  case TypeConstrained(name: String, constraints: Chunk[(String, RustType)])
+  case Plus(a: RustType, b: RustType)
+
+  @targetName("plus")
+  def +(other: RustType): RustType =
+    Plus(this, other)
 
 object RustType:
   val u8: RustType = Primitive("u8")
@@ -91,6 +101,31 @@ object RustType:
 
   def btreeSet(elemType: RustType): RustType =
     module("std", "collections").parametric("BTreeSet", elemType)
+
+  def byteStream: RustType =
+    RustType.parametric(
+      "Box",
+      RustType.dyn(
+        RustType
+          .module("futures_core")
+          .typeConstrained(
+            "Stream",
+            "Item" -> RustType.module("reqwest").parametric("Result", RustType.module("bytes").primitive("Bytes"))
+          ) + send + sync + unpin
+      )
+    )
+
+  def byteStreamRequiredCrates: Set[Crate] =
+    Set(
+      Crate.bytes,
+      Crate.futuresCore,
+      Crate.reqwest
+    )
+  def dyn(inner: RustType): RustType =
+    RustType.Dyn(inner)
+
+  def impl(inner: RustType): RustType =
+    RustType.Impl(inner)
 
   def hashMap(keyType: RustType, valueType: RustType): RustType =
     module("std", "collections").parametric("HashMap", keyType, valueType)
@@ -181,8 +216,16 @@ object RustType:
   def result(ok: RustType, err: RustType): RustType =
     RustType.Parametric("Result", Chunk(ok, err))
 
+  def send: RustType = primitive("Send")
+  def sync: RustType = primitive("Sync")
+
   def tuple2(left: RustType, right: RustType): RustType =
     RustType.Tuple(Chunk(left, right))
+
+  def typeConstrained(name: String, constraints: (String, RustType)*): RustType =
+    RustType.TypeConstrained(name, Chunk.fromIterable(constraints))
+
+  def unpin: RustType = primitive("Unpin")
 
   def vec(inner: RustType): RustType =
     RustType.Vec(inner)
@@ -196,3 +239,6 @@ final case class RustTypeInModule(path: Chunk[String]):
 
   def primitive(name: String): RustType =
     RustType.SelectFromModule(path, RustType.primitive(name))
+
+  def typeConstrained(name: String, constraints: (String, RustType)*): RustType =
+    RustType.SelectFromModule(path, RustType.TypeConstrained(name, Chunk.fromIterable(constraints)))

@@ -52,7 +52,12 @@ object Rust:
       str(name) ~ bracketed(typename.repeatWithSep(comma)(params))
     case RustType.Tuple(params) =>
       parentheses(typename.repeatWithSep(comma)(params))
-    case RustType.Ref(inner) => Printer.print('&') ~ typename(inner)
+    case RustType.Ref(inner)  => ch('&') ~ typename(inner)
+    case RustType.Impl(inner) => str("impl") ~~ typename(inner)
+    case RustType.Dyn(inner)  => str("dyn") ~~ typename(inner)
+    case RustType.TypeConstrained(n, constraints) =>
+      str(n) ~ bracketed((Printer.anyString ~~ ch('=') ~~ typename).repeatWithSep(comma)(constraints))
+    case RustType.Plus(a, b) => typename(a) ~~ ch('+') ~~ typename(b)
 
   def definition: Rust[RustDef] = Printer.byValue:
     definition(0)(_)

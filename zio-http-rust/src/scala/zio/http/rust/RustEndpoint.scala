@@ -4,7 +4,7 @@ import zio.{Chunk, IO, ZIO}
 import zio.http.{Method, Status}
 import zio.http.codec.{HttpCodec, HttpCodecType, PathCodec, SegmentCodec, SimpleCodec, TextCodec}
 import zio.http.endpoint.*
-import zio.http.rust.RustEndpoint.EndpointErrorCase
+import zio.http.rust.RustEndpoint.{EndpointErrorCase, byteArrayToStream}
 import zio.http.rust.printer.RustClient
 import zio.prelude.*
 import zio.prelude.fx.*
@@ -51,7 +51,7 @@ final case class RustEndpoint(
 
   def resultType: RustType =
     RustType.result(
-      outputs.head._2,
+      byteArrayToStream(outputs.head._2),
       errorType
     ) // TODO
 
@@ -240,38 +240,43 @@ object RustEndpoint:
         case None => this
         case Some(status) =>
           val newOutputs = if !isError then outputs.updated(status, tpe) else outputs
+          val cratesForOutputs = if newOutputs.values.exists(_ == RustType.vec(RustType.u8)) then RustType.byteStreamRequiredCrates else Set.empty
           val isErrorCons = isError && isConstructorOfKnownErrorAdt(schema)
-          val newErrors =
+          val (newErrors, cratesForErrors) =
             if isError then
               if isErrorCons then
                 schema match
                   case record: Schema.Record[?] =>
-                    if record.fields.isEmpty then errors.updated(status, EndpointErrorCase.Simple(Name.fromString(record.id.name)))
+                    if record.fields.isEmpty then (errors.updated(status, EndpointErrorCase.Simple(Name.fromString(record.id.name))), Set.empty)
                     else
                       val model = RustModel.fromSchema(record).toOption.get
                       val fields = model.definitions.collectFirst:
                         case RustDef.Struct(name, fields, _, _) if name == Name.fromString(record.id.name) =>
                           (fields.map(_.copy(attributes = Chunk.empty, isPublic = false)), fields)
-                      errors.updated(
-                        status,
-                        EndpointErrorCase.Inlined(
-                          fields.map(_._1).getOrElse(Chunk.empty),
-                          Name.fromString(record.id.name),
-                          knownErrorAdtType.get,
-                          knownErrorAdtName.get,
-                          fields.map(_._2).getOrElse(Chunk.empty)
-                        )
+                      (
+                        errors.updated(
+                          status,
+                          EndpointErrorCase.Inlined(
+                            fields.map(_._1).getOrElse(Chunk.empty),
+                            Name.fromString(record.id.name),
+                            knownErrorAdtType.get,
+                            knownErrorAdtName.get,
+                            fields.map(_._2).getOrElse(Chunk.empty)
+                          )
+                        ),
+                        model.requiredCrates
                       )
                   case _ =>
-                    errors.updated(status, EndpointErrorCase.Simple(Name.fromString("unknown")))
-              else errors.updated(status, EndpointErrorCase.ExternalType(tpe))
-            else errors
+                    (errors.updated(status, EndpointErrorCase.Simple(Name.fromString("unknown"))), Set.empty)
+              else (errors.updated(status, EndpointErrorCase.ExternalType(tpe)), Set.empty)
+            else (errors, Set.empty)
           val newReferredSchemas = if isErrorCons then referredSchemas else referredSchemas + schema
           copy(
             possibleOutputStack = newPossibleOutputStack,
             outputs = newOutputs,
             errors = newErrors,
-            referredSchemas = newReferredSchemas
+            referredSchemas = newReferredSchemas,
+            requiredCrates = requiredCrates union cratesForOutputs union cratesForErrors
           )
 
     private def isConstructorOfKnownErrorAdt(schema: Schema[?]): Boolean =
@@ -332,7 +337,7 @@ object RustEndpoint:
       pathSegments = state.pathSegments,
       queryParameters = state.queryParameters,
       headers = state.headers,
-      bodies = state.bodies,
+      bodies = transformByteStreamBodies(state.bodies),
       referredSchemas = state.referredSchemas,
       outputs = state.outputs,
       errors = state.errors,
@@ -353,7 +358,7 @@ object RustEndpoint:
   private def addInput[Input](input: HttpCodec[HttpCodecType.RequestType, Input], optional: Boolean = false): Fx[Unit] =
     input match
       case HttpCodec.Combine(left, right, inputCombiner) =>
-        addInput(left) *> addInput(right)
+        addInput(left, optional) *> addInput(right, optional)
       case HttpCodec.Content(schema, mediaType, name, index) =>
         ZPure
           .fromEither(RustModel.fromSchema(schema))
@@ -374,7 +379,7 @@ object RustEndpoint:
       case HttpCodec.Fallback(left, HttpCodec.Empty) =>
         addInput(left, optional = true)
       case HttpCodec.Fallback(left, right) =>
-        addInput(left) // NOTE: right not supported
+        addInput(left, optional) // NOTE: right not supported
       case HttpCodec.Halt =>
         ZPure.unit
       case HttpCodec.Header(name, codec, index) =>
@@ -418,9 +423,9 @@ object RustEndpoint:
       case HttpCodec.Status(codec, index) =>
         ZPure.unit
       case HttpCodec.TransformOrFail(api, f, g) =>
-        addInput(api)
+        addInput(api, optional)
       case HttpCodec.Annotated(codec, metadata) =>
-        addInput(codec)
+        addInput(codec, optional)
 
   private def addOutput[Output](output: HttpCodec[HttpCodecType.ResponseType, Output], isError: Boolean): Fx[Unit] =
     output match
@@ -502,6 +507,18 @@ object RustEndpoint:
         addPath(left) *> addPath(right)
       case PathCodec.TransformOrFail(api, f, g) =>
         addPath(api)
+
+  private def byteArrayToStream(rustType: RustType): RustType =
+    if rustType == RustType.vec(RustType.u8) then RustType.byteStream
+    else rustType
+
+  private def transformByteStreamBodies(bodies: Chunk[(Name, RustType)]): Chunk[(Name, RustType)] =
+    bodies.map:
+      case (name, RustType.Vec(RustType.u8)) =>
+        if bodies.size == 1 then (name, RustType.byteStream)
+        else (name, Types.intoBody)
+      case (name, tpe) =>
+        (name, tpe)
 
   def withKnownErrorAdt[A](using Schema[A]): WithKnownErrorAdt =
     WithKnownErrorAdt(Schema[A])

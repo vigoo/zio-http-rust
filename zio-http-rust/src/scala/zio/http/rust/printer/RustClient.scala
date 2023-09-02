@@ -5,6 +5,7 @@ import zio.http.Status
 import zio.http.rust.*
 import zio.parser.*
 import zio.rust.codegen.ast.{Name, RustAttribute, RustDef, RustType}
+import Types.*
 
 object RustClient:
 
@@ -37,7 +38,8 @@ object RustClient:
   def implFn: Rust[RustEndpoint] =
     Printer.byValue: endpoint =>
       val decodeSuccessfulBody =
-        if endpoint.outputs(Status.Ok) == RustType.vec(RustType.u8) then str("result.bytes().await?.to_vec()")
+        if endpoint.outputs(Status.Ok) == RustType.vec(RustType.u8) then str("Box::new") ~ parentheses(str("result.bytes_stream()"))
+        else if endpoint.outputs(Status.Ok) == RustType.unit then str("()")
         else str("result.json::<") ~ typename(endpoint.successType) ~ str(">().await?")
 
       indent ~ str("async fn") ~~ name(endpoint.name.toSnakeCase) ~ parentheses(parameterList(endpoint.allParameters)) ~~ str("->") ~~ typename(
@@ -59,9 +61,16 @@ object RustClient:
         indent(3) ~ ch('.') ~ str(endpoint.method.toLowerCase) ~ parentheses(str("url")) ~ newline ~
         (if endpoint.headers.nonEmpty then indent(3) ~ str(".headers(headers)") ~ newline
          else Printer.unit) ~
-        (if endpoint.bodies.size == 1 then indent(3) ~ str(".json") ~ parentheses(ch('&') ~ name(endpoint.bodies.head._1)) ~ newline
-         else if endpoint.bodies.size > 1 then indent(3) ~ str(".multipart(form)") ~ newline
-         else Printer.unit) ~
+        (
+          if endpoint.bodies.size == 1 then
+            if endpoint.bodies.head._2 == RustType.byteStream then
+              indent(3) ~ str(".body") ~ parentheses(
+                typename(Types.reqwestBody) ~ dcolon ~ str("wrap_stream") ~ parentheses(name(endpoint.bodies.head._1))
+              ) ~ newline
+            else indent(3) ~ str(".json") ~ parentheses(ch('&') ~ name(endpoint.bodies.head._1)) ~ newline
+          else if endpoint.bodies.size > 1 then indent(3) ~ str(".multipart(form)") ~ newline
+          else Printer.unit
+        ) ~
         indent(3) ~ str(".send()") ~ newline ~
         indent(3) ~ str(".await?") ~ ch(';') ~ newline ~
         indent(2) ~ str("match") ~~ str("result.status().as_u16()") ~~ ch('{') ~ newline ~
@@ -86,6 +95,10 @@ object RustClient:
         else if tpe == RustType.string then typename(reqwestMultipartPart) ~ dcolon ~ str("text") ~ parentheses(ch('&') ~ name(n.toSnakeCase))
         else if tpe == RustType.vec(RustType.u8) then
           typename(reqwestMultipartPart) ~ dcolon ~ str("bytes") ~ parentheses(name(n.toSnakeCase)) ~ str(""".mime_str("application/octet-stream")""") ~ ch('?')
+        else if tpe == Types.intoBody then
+          typename(reqwestMultipartPart) ~ dcolon ~ str("stream") ~ parentheses(name(n.toSnakeCase)) ~ str(""".mime_str("application/octet-stream")""") ~ ch(
+            '?'
+          )
         else
           typename(reqwestMultipartPart) ~ dcolon ~ str("text") ~ parentheses(
             str("serde_json") ~ dcolon ~ str("to_string") ~ parentheses(ch('&') ~ name(n.toSnakeCase)) ~ str(""".expect("Failed to serialize value to JSON")""")
@@ -197,10 +210,3 @@ object RustClient:
 
   private def parameterName: Rust[Name] =
     Printer.anyString.contramap(_.toSnakeCase.asString)
-
-  private def reqwestClient: RustType = RustType.module("reqwest").primitive("Client")
-  private def reqwestUrl: RustType = RustType.module("reqwest").primitive("Url")
-  private def reqwestHeaderMap: RustType = RustType.module("reqwest", "header").primitive("HeaderMap")
-  private def reqwestHeaderValue: RustType = RustType.module("reqwest", "header").primitive("HeaderValue")
-  private def reqwestMultipartForm: RustType = RustType.module("reqwest", "multipart").primitive("Form")
-  private def reqwestMultipartPart: RustType = RustType.module("reqwest", "multipart").primitive("Part")
