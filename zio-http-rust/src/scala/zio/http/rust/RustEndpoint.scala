@@ -515,8 +515,7 @@ object RustEndpoint:
   private def transformByteStreamBodies(bodies: Chunk[(Name, RustType)]): Chunk[(Name, RustType)] =
     bodies.map:
       case (name, RustType.Vec(RustType.u8)) =>
-        if bodies.size == 1 then (name, RustType.byteStream)
-        else (name, Types.intoBody)
+        (name, Types.intoBody)
       case (name, tpe) =>
         (name, tpe)
 

@@ -63,10 +63,8 @@ object RustClient:
          else Printer.unit) ~
         (
           if endpoint.bodies.size == 1 then
-            if endpoint.bodies.head._2 == RustType.byteStream then
-              indent(3) ~ str(".body") ~ parentheses(
-                typename(Types.reqwestBody) ~ dcolon ~ str("wrap_stream") ~ parentheses(name(endpoint.bodies.head._1))
-              ) ~ newline
+            if endpoint.bodies.head._2 == Types.intoBody then
+              indent(3) ~ str(".body") ~ parentheses(name(endpoint.bodies.head._1)) ~ newline
             else indent(3) ~ str(".json") ~ parentheses(ch('&') ~ name(endpoint.bodies.head._1)) ~ newline
           else if endpoint.bodies.size > 1 then indent(3) ~ str(".multipart(form)") ~ newline
           else Printer.unit
