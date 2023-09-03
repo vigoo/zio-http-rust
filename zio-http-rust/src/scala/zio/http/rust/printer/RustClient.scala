@@ -174,7 +174,7 @@ object RustClient:
     Printer.byValue:
       case (status, (RustEndpoint.EndpointErrorCase.Simple(cname), n, errorType)) =>
         indent(3) ~ name(n) ~ dcolon ~ str(s"Status${status}") ~~ str("=>") ~~ str("Some") ~ parentheses(
-          typename(errorType) ~ dcolon ~ name(cname)
+          typename(errorType) ~ dcolon ~ name(cname) ~~ str("{}")
         ) ~ comma ~ newline
       case (status, (RustEndpoint.EndpointErrorCase.Inlined(fields, cname, _, _, _), n, errorType)) =>
         indent(3) ~ name(n) ~ dcolon ~ str(s"Status${status}") ~~ ch('{') ~~ structFieldPatterns(fields) ~~ ch('}') ~~ str("=>") ~~

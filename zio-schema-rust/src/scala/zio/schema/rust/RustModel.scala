@@ -4,7 +4,7 @@ import zio.Chunk
 import zio.prelude.*
 import zio.prelude.fx.*
 import zio.rust.codegen.ast.{Crate, Name, RustAttribute, RustDef, RustType}
-import zio.schema.{Schema, TypeId}
+import zio.schema.{Schema, StandardType, TypeId}
 
 final case class RustModel(typeRefs: Map[Schema[?], RustType], definitions: Chunk[RustDef], requiredCrates: Set[Crate])
 
@@ -293,11 +293,6 @@ object RustModel:
               val rustCases = sum.cases.forEach: constructor =>
                 val forced = eval(constructor.schema)
                 forced match
-                  case record: Schema.Record[_] if record.fields.isEmpty =>
-                    // Simple enum case with no fields
-                    ZPure.succeed(
-                      RustDef.Newtype(Name.fromString(constructor.id), RustType.unit, derives = Chunk.empty)
-                    )
                   case record: Schema.Record[_] =>
                     // Records with at least one field get inlined
                     val rustFields = record.fields.forEach: field =>
@@ -314,13 +309,15 @@ object RustModel:
                           )
 
                     rustFields.map: fields =>
-                      RustDef
-                        .pubStruct(Name.fromString(record.id.name), fields: _*)
-                  case _ =>
+                      RustDef.pubStruct(Name.fromString(record.id.name), fields: _*)
+                  case prim: Schema.Primitive[?] if prim.standardType == StandardType.UnitType =>
+                    ZPure.succeed(RustDef.pubStruct(Name.fromString(constructor.id)))
+                  case x =>
                     // Otherwise we generate the constructor type separately and just refer to it
                     process(constructor.schema) *>
                       getRustType(constructor.schema).map: rustType =>
-                        RustDef.Newtype(Name.fromString(constructor.id), rustType, derives = Chunk.empty)
+                        if rustType == RustType.unit then RustDef.pubStruct(Name.fromString(constructor.id))
+                        else RustDef.newtype(Name.fromString(constructor.id), rustType)
 
               for
                 canBeOrd <- canDeriveOrdFor(sum)
