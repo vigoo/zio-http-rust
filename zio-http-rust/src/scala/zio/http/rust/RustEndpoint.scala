@@ -460,6 +460,8 @@ object RustEndpoint:
         for
           _ <- updateState(_.startPossibleOutput(isError))
           _ <- addOutput(left, isError)
+          _ <- updateState(_.finishPossibleOutput())
+          _ <- updateState(_.startPossibleOutput(isError))
           _ <- addOutput(right, isError)
           _ <- updateState(_.finishPossibleOutput())
         yield ()
