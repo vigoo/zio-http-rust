@@ -290,34 +290,46 @@ object RustModel:
         stacked(schema):
           schema match
             case sum: Schema.Enum[_] =>
-              val rustCases = sum.cases.forEach: constructor =>
+              val simpleEnum = sum.cases.forall: constructor =>
                 val forced = eval(constructor.schema)
                 forced match
-                  case record: Schema.Record[_] =>
-                    // Records with at least one field get inlined
-                    val rustFields = record.fields.forEach: field =>
-                      process(field.schema) *>
-                        boxIfNeeded(field.schema).map: rustType =>
-                          val name = Name.fromString(field.name)
-                          val snakeName = name.toSnakeCase
-                          RustDef.Field(
-                            snakeName,
-                            rustType,
-                            if name.asString != snakeName.asString then Chunk(RustAttribute(RustType.serde, s"""rename = "${name.asString}""""))
-                            else Chunk.empty,
-                            isPublic = false
-                          )
+                  case record: Schema.Record[_] => record.fields.isEmpty
+                  case _                        => false
 
-                    rustFields.map: fields =>
-                      RustDef.pubStruct(Name.fromString(record.id.name), fields: _*)
-                  case prim: Schema.Primitive[?] if prim.standardType == StandardType.UnitType =>
-                    ZPure.succeed(RustDef.pubStruct(Name.fromString(constructor.id)))
-                  case x =>
-                    // Otherwise we generate the constructor type separately and just refer to it
-                    process(constructor.schema) *>
-                      getRustType(constructor.schema).map: rustType =>
-                        if rustType == RustType.unit then RustDef.pubStruct(Name.fromString(constructor.id))
-                        else RustDef.newtype(Name.fromString(constructor.id), rustType)
+              val rustCases = sum.cases.forEach: constructor =>
+                if simpleEnum then
+                  // Simple enum case with no fields
+                  ZPure.succeed(
+                    RustDef.Newtype(Name.fromString(constructor.id), RustType.unit, derives = Chunk.empty)
+                  )
+                else
+                  val forced = eval(constructor.schema)
+                  forced match
+                    case record: Schema.Record[_] =>
+                      // Records with at least one field get inlined
+                      val rustFields = record.fields.forEach: field =>
+                        process(field.schema) *>
+                          boxIfNeeded(field.schema).map: rustType =>
+                            val name = Name.fromString(field.name)
+                            val snakeName = name.toSnakeCase
+                            RustDef.Field(
+                              snakeName,
+                              rustType,
+                              if name.asString != snakeName.asString then Chunk(RustAttribute(RustType.serde, s"""rename = "${name.asString}""""))
+                              else Chunk.empty,
+                              isPublic = false
+                            )
+
+                      rustFields.map: fields =>
+                        RustDef.pubStruct(Name.fromString(record.id.name), fields: _*)
+                    case prim: Schema.Primitive[?] if prim.standardType == StandardType.UnitType =>
+                      ZPure.succeed(RustDef.pubStruct(Name.fromString(constructor.id)))
+                    case x =>
+                      // Otherwise we generate the constructor type separately and just refer to it
+                      process(constructor.schema) *>
+                        getRustType(constructor.schema).map: rustType =>
+                          if rustType == RustType.unit then RustDef.pubStruct(Name.fromString(constructor.id))
+                          else RustDef.newtype(Name.fromString(constructor.id), rustType)
 
               for
                 canBeOrd <- canDeriveOrdFor(sum)
