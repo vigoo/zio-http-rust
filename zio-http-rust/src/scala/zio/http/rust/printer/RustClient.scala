@@ -28,7 +28,14 @@ object RustClient:
   def liveClientImpl: Rust[RustEndpoints] =
     Printer.byValue: endpoints =>
       definition(
-        RustDef.pubStruct(endpoints.liveName, RustDef.Field(Name.fromString("base_url"), reqwestUrl)).derive(RustType.rustClone).derive(RustType.debug)
+        RustDef
+          .pubStruct(
+            endpoints.liveName,
+            RustDef.Field(Name.fromString("base_url"), reqwestUrl),
+            RustDef.Field(Name.fromString("allow_insecure"), RustType.bool)
+          )
+          .derive(RustType.rustClone)
+          .derive(RustType.debug)
       ) ~ newline ~ newline ~
         attribute(asyncTrait) ~
         str("impl") ~~ name(endpoints.name.toPascalCase) ~~ str("for") ~~ name(endpoints.liveName.toPascalCase) ~~ ch('{') ~ newline ~
@@ -56,8 +63,12 @@ object RustClient:
            indent(2) ~ str("let form") ~~ ch('=') ~~ typename(reqwestMultipartForm) ~ dcolon ~ str("new()") ~ newline ~
              formParts(endpoint.bodies) ~ ch(';') ~ newline
          else Printer.unit) ~
-        indent(2) ~ str("let result") ~~ ch('=') ~~ typename(reqwestClient) ~ dcolon ~ str("builder()") ~ newline ~
-        indent(3) ~ str(".build()?") ~ newline ~
+        indent(2) ~ str("let mut builder") ~~ ch('=') ~~ typename(reqwestClient) ~ dcolon ~ str("builder()") ~ ch(';') ~ newline ~
+        indent(2) ~ str("if") ~~ str("self.allow_insecure") ~~ ch('{') ~ newline ~
+        indent(3) ~ str("builder") ~~ ch('=') ~~ str("builder") ~ ch('.') ~ str("danger_accept_invalid_certs") ~ parentheses(str("true")) ~ ch(';') ~ newline ~
+        indent(2) ~ ch('}') ~ newline ~
+        indent(2) ~ str("let client") ~~ ch('=') ~~ str("builder.build()?") ~ ch(';') ~ newline ~
+        indent(2) ~ str("let result") ~~ ch('=') ~~ str("client") ~ newline ~
         indent(3) ~ ch('.') ~ str(endpoint.method.toLowerCase) ~ parentheses(str("url")) ~ newline ~
         (if endpoint.headers.nonEmpty then indent(3) ~ str(".headers(headers)") ~ newline
          else Printer.unit) ~
