@@ -143,23 +143,6 @@ final case class RustEndpoint(
             .derive(RustType.deserialize)
     ).flatten
 
-  def pathExpression: String =
-    if pathSegments.forall(_.isLiteral) then
-      """"""" +
-        pathSegments
-          .collect:
-            case RustPathSegment.Literal(value) => value
-          .mkString("/") + """""""
-    else
-      """&format!("""" +
-        pathSegments
-          .map:
-            case RustPathSegment.Trailing           => "{path}"
-            case RustPathSegment.Parameter(name, _) => "{" + name.toSnakeCase.asString + "}"
-            case RustPathSegment.Literal(value)     => value
-          .mkString("/") +
-        """")"""
-
   def toEndpoints: RustEndpoints =
     RustEndpoints(Name.fromString("Api"), Chunk(this))
 
