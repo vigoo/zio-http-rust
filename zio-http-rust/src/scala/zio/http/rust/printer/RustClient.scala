@@ -42,6 +42,35 @@ object RustClient:
         implFn.repeatWithSep0(ch('\n'))(endpoints.endpoints) ~
         ch('}') ~ newline
 
+  def toRefStr(name: Name, tpe: RustType): Rust[Any] =
+    if tpe == RustType.ref(RustType.str) then str(name.toSnakeCase.asString)
+    else if tpe == RustType.uuid then str("&" + name.toSnakeCase.asString + ".to_string()")
+    else str("&format!") ~ parentheses(ch('"') ~ ch('{') ~ str(name.toSnakeCase.asString) ~ ch('}') ~ ch('"')) // TODO: better to &str conversion
+
+  def pathAppend(pathSegments: List[RustPathSegment], acc: Rust[Any] = Printer.unit, inChain: Boolean = false): Rust[Any] =
+    pathSegments match
+      case Nil => if inChain then acc ~ ch(';') ~ newline else acc
+      case RustPathSegment.Literal(value) :: rest =>
+        val chain = if inChain then acc ~ newline else acc ~ indent(2) ~ str("url.path_segments_mut().unwrap()") ~ newline
+
+        val nextAcc = chain ~ indent(3) ~ str(".push") ~ parentheses(str("\"" + value + "\"")) // TODO escape
+
+        pathAppend(rest, nextAcc, inChain = true)
+      case RustPathSegment.Parameter(name, tpe) :: rest =>
+        val chain = if inChain then acc ~ newline else acc ~ indent(2) ~ str("url.path_segments_mut().unwrap()") ~ newline
+
+        val nextAcc = chain ~ indent(3) ~ str(".push") ~ parentheses(toRefStr(name, tpe))
+
+        pathAppend(rest, nextAcc, inChain = true)
+      case RustPathSegment.Trailing :: rest =>
+        val chainStopped = if inChain then acc ~ ch(';') ~ newline else acc
+
+        val mut = if rest.isEmpty then Printer.unit else str("mut ")
+
+        val nextAcc = chainStopped ~ indent(2) ~ str("let ") ~ mut ~ str("url = url.join(path).unwrap();") ~ newline
+
+        pathAppend(rest, nextAcc, inChain = false)
+
   def implFn: Rust[RustEndpoint] =
     Printer.byValue: endpoint =>
       val decodeSuccessfulBody =
@@ -53,7 +82,7 @@ object RustClient:
         endpoint.resultType
       ) ~~ ch('{') ~ newline ~
         indent(2) ~ str("let mut url") ~~ ch('=') ~~ str("self.base_url.clone()") ~ ch(';') ~ newline ~
-        indent(2) ~ str("url.set_path") ~ parentheses(str(endpoint.pathExpression)) ~ ch(';') ~ newline ~
+        pathAppend(endpoint.pathSegments.toList) ~
         queryParameters(endpoint.queryParameters) ~ newline ~
         (if (endpoint.headers.nonEmpty) then
            indent(2) ~ str("let mut headers") ~~ ch('=') ~~ typename(reqwestHeaderMap) ~ dcolon ~ str("new();") ~ newline ~
