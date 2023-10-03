@@ -88,7 +88,7 @@ final case class RustEndpoint(
                   case (status, EndpointErrorCase.Simple(_)) =>
                     RustDef.newtype(Name.fromString(s"Status${status.code}"), RustType.unit)
                 .toSeq: _*
-          ),
+          ).derive(RustType.debug),
           RustDef.impl(
             RustType.parametric("From", RustType.module("reqwest").primitive("Error")),
             errorType,
