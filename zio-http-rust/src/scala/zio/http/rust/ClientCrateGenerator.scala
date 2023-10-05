@@ -58,7 +58,22 @@ final case class ClientCrateGenerator(name: String, version: String, description
 
   private def writeLib(path: Path): ZIO[Any, IOException, Unit] =
     val moduleNames = endpoints.map(_.name.toSnakeCase.asString) :+ "model"
-    val lib = moduleNames.map(name => s"pub mod $name;").mkString("\n")
+    val pubs = moduleNames.map(name => s"pub mod $name;").mkString("\n")
+
+    val utils =
+      """
+        |pub fn hide_authorization<'t>(k: &'t http::HeaderName, v: &http::HeaderValue) -> (&'t str, String) {
+        |    let k_str = k.as_str();
+        |
+        |    let v_str =
+        |        if k_str.to_lowercase() == "authorization" { "******".to_string() }
+        |        else { format!("{:?}", v) };
+        |
+        |    (k_str, v_str)
+        |}
+        |""".stripMargin
+
+    val lib = pubs + "\n" + utils
 
     Files.writeBytes(path, Chunk.fromArray(lib.getBytes(StandardCharsets.UTF_8)))
 

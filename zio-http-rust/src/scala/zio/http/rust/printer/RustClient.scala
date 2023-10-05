@@ -53,7 +53,7 @@ object RustClient:
       case RustPathSegment.Literal(value) :: rest =>
         val chain = if inChain then acc ~ newline else acc ~ indent(2) ~ str("url.path_segments_mut().unwrap()") ~ newline
 
-        val nextAcc = chain ~ indent(3) ~ str(".push") ~ parentheses(str("\"" + value + "\"")) // TODO escape
+        val nextAcc = chain ~ indent(3) ~ str(".push") ~ parentheses(quotedStr(value))
 
         pathAppend(rest, nextAcc, inChain = true)
       case RustPathSegment.Parameter(name, tpe) :: rest =>
@@ -71,6 +71,19 @@ object RustClient:
 
         pathAppend(rest, nextAcc, inChain = false)
 
+  def tracing(keyVal: (String, Rust[Any])*)(msg: Rust[Any]): Rust[Any] =
+    val params = keyVal.map((k, v) => str(k) ~ str("=") ~ v).appendedAll(Seq(msg)).reduceOption((p1, p2) => p1 ~ str(",") ~~ p2).getOrElse(Printer.unit)
+
+    str("tracing::info!") ~ parentheses(params) ~ ch(';') ~ newline
+
+  def quotedStr: Rust[String] = Printer.anyString.contramap(v => "\"" + v + "\"") // TODO escape
+
+  private def bodyTrace(bodies: Chunk[(Name, RustType)]): Rust[Any] =
+    if bodies.isEmpty then quotedStr("<no_body>")
+    else if bodies.size == 1 && bodies.head._2 == Types.intoBody then quotedStr("<custom>")
+    else if bodies.size == 1 then str("serde_json::to_string") ~ parentheses(ch('&') ~ name(bodies.head._1)) ~ str(".unwrap()")
+    else quotedStr("<multipart>")
+
   def implFn: Rust[RustEndpoint] =
     Printer.byValue: endpoint =>
       val decodeSuccessfulBody =
@@ -84,10 +97,23 @@ object RustClient:
         indent(2) ~ str("let mut url") ~~ ch('=') ~~ str("self.base_url.clone()") ~ ch(';') ~ newline ~
         pathAppend(endpoint.pathSegments.toList) ~
         queryParameters(endpoint.queryParameters) ~ newline ~
-        (if (endpoint.headers.nonEmpty) then
+        (if endpoint.headers.nonEmpty then
            indent(2) ~ str("let mut headers") ~~ ch('=') ~~ typename(reqwestHeaderMap) ~ dcolon ~ str("new();") ~ newline ~
              headers(endpoint.headers) ~ newline
          else Printer.unit) ~
+        indent(2) ~ ch('{') ~ newline ~
+        {
+          if endpoint.headers.nonEmpty then
+            indent(3) ~ str("""let headers_vec: Vec<(&str, String)> = headers.iter().map(|(k, v)| crate::hide_authorization(k, v)).collect();""") ~ newline
+          else
+            indent(3) ~ str("""let headers_vec: Vec<(&str, String)> = vec![];""")
+        } ~
+        indent(3) ~ tracing(
+          "method" -> quotedStr(endpoint.method.toLowerCase),
+          "url" -> str("url.to_string()"),
+          "headers" -> str("?headers_vec"),
+          "body" -> bodyTrace(endpoint.bodies))(quotedStr(endpoint.name.toSnakeCase.asString)) ~
+        indent(2) ~ ch('}') ~ newline ~
         (if endpoint.bodies.size > 1 then
            indent(2) ~ str("let form") ~~ ch('=') ~~ typename(reqwestMultipartForm) ~ dcolon ~ str("new()") ~ newline ~
              formParts(endpoint.bodies) ~ ch(';') ~ newline

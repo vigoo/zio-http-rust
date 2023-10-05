@@ -15,3 +15,5 @@ object Crate:
   val serde: Crate = Crate("serde", "1.0.181", features = Set("derive"))
   val serdeJson: Crate = Crate("serde_json", "1.0.105")
   val uuid: Crate = Crate("uuid", "1.4.1", features = Set("serde"))
+  val tracing: Crate = Crate("tracing", "0.1.37")
+  val http: Crate = Crate("http", "0.2.9")
