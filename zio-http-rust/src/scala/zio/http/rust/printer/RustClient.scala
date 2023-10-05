@@ -106,7 +106,7 @@ object RustClient:
           if endpoint.headers.nonEmpty then
             indent(3) ~ str("""let headers_vec: Vec<(&str, String)> = headers.iter().map(|(k, v)| crate::hide_authorization(k, v)).collect();""") ~ newline
           else
-            indent(3) ~ str("""let headers_vec: Vec<(&str, String)> = vec![];""")
+            indent(3) ~ str("""let headers_vec: Vec<(&str, String)> = vec![];""") ~ newline
         } ~
         indent(3) ~ tracing(
           "method" -> quotedStr(endpoint.method.toLowerCase),
