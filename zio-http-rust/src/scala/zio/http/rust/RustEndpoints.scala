@@ -28,4 +28,4 @@ final case class RustEndpoints(name: Name, originalEndpoints: Chunk[RustEndpoint
   def named(name: String): RustEndpoints = copy(name = Name.fromString(name))
 
   def requiredCrates: Set[Crate] =
-    endpoints.flatMap(_.requiredCrates).toSet + Crate.reqwest + Crate.asyncTrait
+    endpoints.flatMap(_.requiredCrates).toSet + Crate.reqwest + Crate.asyncTrait + Crate.tracing + Crate.http
